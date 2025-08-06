@@ -1,5 +1,15 @@
 const MEMORY_SIZE: usize = 1024;
 
+pub const ra: usize = 1;
+pub const sp: usize = 2;
+pub const t0: usize = 5;
+pub const t1: usize = 6;
+pub const t2: usize = 7;
+pub const s0: usize = 8;
+pub const s1: usize = 9;
+pub const a0: usize = 10;
+pub const a1: usize = 11;
+
 // Opcodes for RISC-V-like instruction set
 pub const OP_HALT: u8 = 0x00;
 pub const OP_ADD: u8 = 0x01;
