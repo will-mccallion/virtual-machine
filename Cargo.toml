@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+    "vm",
+    "assembler",
+    "os",
+]
+
+resolver = "3"
