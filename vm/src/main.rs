@@ -30,11 +30,5 @@ fn main() {
 
     vm.run();
 
-    println!("\n--- VM execution finished ---");
-    println!("Final pc value:");
-    println!("{:#04X}", vm.pc);
-    println!("Final register state:");
-    for i in 0..8 {
-        println!("x{}: {}", i, vm.registers[i]);
-    }
+    vm.print_state();
 }
