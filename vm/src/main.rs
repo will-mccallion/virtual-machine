@@ -1,26 +1,40 @@
 mod virtualmachine;
-use virtualmachine::{OP_ADD, OP_ADDI, OP_HALT, VM};
+
+use std::env;
+use std::fs;
+use std::process::exit;
+use virtualmachine::VM;
 
 fn main() {
-    let mut vm = VM::new();
+    let args: Vec<String> = env::args().collect();
 
-    // Our new program, written in RISC-V style assembly
-    let program = vec![
-        OP_ADDI, 5, 0, 10, // addi x5, 10
-        OP_ADDI, 6, 0, 25, // addi x6, 25
-        OP_ADD, 7, 5, 6,       // add x7, x5, x6
-        OP_HALT, // halt
-    ];
-
-    vm.load_program(&program);
-    vm.run();
-
-    println!("VM execution finished.");
-    println!("Final state of registers:");
-
-    for i in 0..32 {
-        println!("x{}: {}", i, vm.registers[i]);
+    if args.len() < 2 {
+        eprintln!("Usage: {} <path-to-bytecode-file>", args[0]);
+        exit(1);
     }
 
-    println!("\nValue in register x7 should be 35: {}", vm.registers[7]);
+    let file_path = &args[1];
+    println!("Loading program from: {}", file_path);
+
+    let program = match fs::read(file_path) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Error: Failed to read file '{}': {}", file_path, e);
+            exit(1);
+        }
+    };
+
+    let mut vm = VM::new();
+
+    vm.load_program(&program);
+
+    vm.run();
+
+    println!("\n--- VM execution finished ---");
+    println!("Final pc value:");
+    println!("{:#04X}", vm.pc);
+    println!("Final register state:");
+    for i in 0..8 {
+        println!("x{}: {}", i, vm.registers[i]);
+    }
 }

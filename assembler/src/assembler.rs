@@ -7,8 +7,8 @@ pub const OP_HALT: u8 = 0x00;
 pub const OP_ADD: u8 = 0x01;
 pub const OP_SUB: u8 = 0x02;
 pub const OP_ADDI: u8 = 0x03;
-pub const OP_LOAD: u8 = 0x04;
-pub const OP_STORE: u8 = 0x05;
+//pub const OP_LOAD: u8 = 0x04;
+//pub const OP_STORE: u8 = 0x05;
 
 pub fn parse_command(program_args: &[String]) -> (String, String) {
     let mut input_file = String::new();

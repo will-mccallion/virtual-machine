@@ -8,8 +8,8 @@ pub const OP_ADDI: u8 = 0x03;
 
 pub struct VM {
     pub registers: [u8; 32],
-    pc: usize,
-    memory: [u8; MEMORY_SIZE],
+    pub pc: usize,
+    pub memory: [u8; MEMORY_SIZE],
 }
 
 impl VM {
