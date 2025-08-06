@@ -121,11 +121,38 @@ impl VM {
 
     pub fn print_state(&self) {
         println!("\n--- VM execution finished ---");
-        println!("Final pc value:");
-        println!("{:#04x}", self.pc);
-        println!("Final register state:");
-        for i in 0..8 {
-            println!("x{}: {:#04x}", i, self.registers[i]);
+        println!("Final pc value: {:#04x}", self.pc);
+        println!("--- Final Register State ---");
+        println!("{:<4} {:<5}  {:<6}", "Reg", "(ABI)", "Value");
+        println!("{:-<4} {:-<5}  {:-<6}", "", "", ""); // Underline for the header
+
+        for i in 0..32 {
+            let abi_name = match i {
+                0 => "zero",
+                1 => "ra",
+                2 => "sp",
+                5 => "t0",
+                6 => "t1",
+                7 => "t2",
+                8 => "s0",
+                9 => "s1",
+                10 => "a0",
+                11 => "a1",
+                _ => "",
+            };
+
+            let reg_name = format!("x{}", i);
+
+            let abi_part = if !abi_name.is_empty() {
+                format!("({})", abi_name)
+            } else {
+                String::new()
+            };
+
+            println!(
+                "{:<4} {:<5}  {:#04x}",
+                reg_name, abi_part, self.registers[i]
+            );
         }
     }
 }

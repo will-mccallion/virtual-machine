@@ -8,4 +8,3 @@ start:
     beq x0, x0, start
 done:
     halt
-

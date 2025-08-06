@@ -48,11 +48,30 @@ pub fn read_file(input_path: &str) -> io::Result<String> {
 }
 
 fn parse_register(reg_str: &str) -> Result<u8, &'static str> {
-    let cleaned_reg = reg_str.trim_start_matches('x').trim_end_matches(',');
-    match cleaned_reg.parse::<u8>() {
-        Ok(num) => Ok(num),
-        Err(_) => Err("Invalid register format"),
+    let cleaned_reg = reg_str.trim_end_matches(',');
+
+    match cleaned_reg {
+        "zero" => return Ok(0),
+        "ra" => return Ok(1),
+        "sp" => return Ok(2),
+        "t0" => return Ok(5),
+        "t1" => return Ok(6),
+        "t2" => return Ok(7),
+        "s0" => return Ok(8),
+        "s1" => return Ok(9),
+        "a0" => return Ok(10),
+        "a1" => return Ok(11),
+        _ => {}
     }
+
+    if cleaned_reg.starts_with('x') {
+        match cleaned_reg[1..].parse::<u8>() {
+            Ok(num) if num < 32 => return Ok(num),
+            _ => return Err("Invalid register number (must be x0-x31)"),
+        }
+    }
+
+    Err("Invalid register format")
 }
 
 pub fn parse_program(program: String) -> Vec<u8> {
@@ -83,11 +102,7 @@ pub fn parse_program(program: String) -> Vec<u8> {
         let operands = &tokens[1..];
         match instruction.as_str() {
             "add" | "sub" => {
-                if instruction == "add" {
-                    bin.push(OP_ADD);
-                } else {
-                    bin.push(OP_SUB);
-                }
+                bin.push(if instruction == "add" { OP_ADD } else { OP_SUB });
                 let rd = parse_register(operands[0]).unwrap();
                 let rs1 = parse_register(operands[1]).unwrap();
                 let rs2 = parse_register(operands[2]).unwrap();
@@ -107,12 +122,10 @@ pub fn parse_program(program: String) -> Vec<u8> {
                 let label = operands[2];
                 let target_address = *symbol_table.get(label).expect("Label not found");
                 let offset = target_address as i32 - current_address as i32;
-                if offset < -128 || offset > 127 {
-                    panic!("Branch offset too large!");
+                if offset > 127 || offset < -128 {
+                    panic!("beq offset too large");
                 }
-                bin.push(rs1);
-                bin.push(rs2);
-                bin.push(offset as i8 as u8);
+                bin.extend_from_slice(&[rs1, rs2, offset as u8]);
             }
             "halt" => {
                 bin.extend_from_slice(&[OP_HALT, 0, 0, 0]);
@@ -126,7 +139,6 @@ pub fn parse_program(program: String) -> Vec<u8> {
     }
     bin
 }
-
 pub fn save_assembly(output_path: &str, data: &[u8]) -> io::Result<()> {
     fs::write(output_path, data)
 }
