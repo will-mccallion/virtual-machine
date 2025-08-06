@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+    "vm",
+    "assembler",
+    "os", "riscv_core",
+]
+
+resolver = "3"

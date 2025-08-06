@@ -1,0 +1,8 @@
+[package]
+name = "assembler"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+riscv_core = { path = "../riscv_core/" }
+bincode = "2.0.1"
