@@ -1,5 +1,5 @@
 # This is a test comment
-addi x1, x0, 10
-addi x2, x0, 20
-add x3, x1, x2
+addi t1, x0, 10
+addi t2, zero, 20
+add s0, t1, t2
 halt

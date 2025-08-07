@@ -1,6 +1,6 @@
-const MEMORY_SIZE: usize = 1024;
+const MEMORY_SIZE: usize = 10240;
 
-// Opcodes for RISC-V-like instruction set
+// Opcodes for our 64-bit RISC-V-like instruction set
 pub const OP_HALT: u8 = 0x00;
 pub const OP_ADD: u8 = 0x01;
 pub const OP_SUB: u8 = 0x02;
@@ -10,20 +10,24 @@ pub const OP_JAL: u8 = 0x05;
 pub const OP_LW: u8 = 0x06;
 pub const OP_SW: u8 = 0x07;
 pub const OP_RET: u8 = 0x08;
+pub const OP_LDI: u8 = 0x09;
 
 pub struct VM {
-    registers: [u8; 32],
-    pc: usize,
+    registers: [u64; 32],
+    pc: u64,
     memory: [u8; MEMORY_SIZE],
 }
 
 impl VM {
     pub fn new() -> VM {
-        VM {
+        let mut vm = VM {
             registers: [0; 32],
             pc: 0,
             memory: [0; MEMORY_SIZE],
-        }
+        };
+
+        vm.registers[2] = MEMORY_SIZE as u64;
+        vm
     }
 
     pub fn load_program(&mut self, program: &[u8]) {
@@ -36,37 +40,47 @@ impl VM {
 
     pub fn run(&mut self) {
         loop {
-            if self.pc >= MEMORY_SIZE - 4 {
-                println!("Program Counter near memory bounds. Halting.");
+            if self.pc as usize >= MEMORY_SIZE {
+                println!("PC out of bounds. Halting.");
+                break;
+            }
+
+            if self.pc >= self.registers[2] {
+                println!(
+                    "Stack overflow detected! PC ({:#x}) collided with SP ({:#x}). Halting.",
+                    self.pc, self.registers[2]
+                );
                 break;
             }
 
             let start_of_cycle_pc = self.pc;
 
-            if !self.execute_instruction() {
-                break;
-            }
-
-            if self.pc == start_of_cycle_pc {
-                self.pc += 4;
+            match self.execute_instruction() {
+                Ok(pc_increment) => {
+                    if self.pc == start_of_cycle_pc {
+                        self.pc += pc_increment;
+                    }
+                }
+                Err(_) => break,
             }
         }
     }
 
-    fn execute_instruction(&mut self) -> bool {
-        let instruction = self.memory[self.pc];
+    fn execute_instruction(&mut self) -> Result<u64, ()> {
+        let pc = self.pc as usize;
+        let instruction = self.memory[pc];
 
         match instruction {
             OP_HALT => {
                 println!("HALT instruction encountered. VM is stopping.");
-                return false;
+                println!("! WARNING: 'halt' is depracted. Please use ret.");
+                Err(())
             }
 
             OP_ADD | OP_SUB => {
-                let rd = self.memory[self.pc + 1] as usize;
-                let rs1 = self.memory[self.pc + 2] as usize;
-                let rs2 = self.memory[self.pc + 3] as usize;
-
+                let rd = self.memory[pc + 1] as usize;
+                let rs1 = self.memory[pc + 2] as usize;
+                let rs2 = self.memory[pc + 3] as usize;
                 if rd > 0 {
                     let val1 = self.registers[rs1];
                     let val2 = self.registers[rs2];
@@ -76,83 +90,105 @@ impl VM {
                         self.registers[rd] = val1.wrapping_sub(val2);
                     }
                 }
+                Ok(4)
             }
 
             OP_ADDI => {
-                let rd = self.memory[self.pc + 1] as usize;
-                let rs1 = self.memory[self.pc + 2] as usize;
-                let imm = self.memory[self.pc + 3] as i8;
-
+                let rd = self.memory[pc + 1] as usize;
+                let rs1 = self.memory[pc + 2] as usize;
+                let imm = self.memory[pc + 3] as i8;
                 if rd > 0 {
                     let val1 = self.registers[rs1];
-                    self.registers[rd] = val1.wrapping_add_signed(imm);
+                    self.registers[rd] = val1.wrapping_add(imm as i64 as u64);
                 }
-            }
-
-            OP_BEQ => {
-                let rs1 = self.memory[self.pc + 1] as usize;
-                let rs2 = self.memory[self.pc + 2] as usize;
-                let offset_byte = self.memory[self.pc + 3] as i8;
-
-                let val1 = self.registers[rs1];
-                let val2 = self.registers[rs2];
-
-                if val1 == val2 {
-                    self.pc = self.pc.wrapping_add_signed(offset_byte as isize);
-                }
-            }
-
-            OP_JAL => {
-                let rd = self.memory[self.pc + 1] as usize;
-                let offset_low = self.memory[self.pc + 2];
-                let offset_high = self.memory[self.pc + 3];
-
-                let offset = i16::from_le_bytes([offset_low, offset_high]);
-
-                if rd > 0 {
-                    self.registers[rd] = (self.pc + 4) as u8;
-                }
-
-                self.pc = self.pc.wrapping_add_signed(offset as isize);
+                Ok(4)
             }
 
             OP_LW => {
-                let rd = self.memory[self.pc + 1] as usize;
-                let base = self.memory[self.pc + 2] as usize;
-                let offset = self.memory[self.pc + 3] as i8;
+                let rd = self.memory[pc + 1] as usize;
+                let base_reg = self.memory[pc + 2] as usize;
+                let offset = self.memory[pc + 3] as i8 as i64;
                 if rd > 0 {
-                    let addr = self.registers[base].wrapping_add_signed(offset as i8);
-                    self.registers[rd] = self.memory[addr as usize];
+                    let addr = self.registers[base_reg].wrapping_add(offset as u64) as usize;
+                    let bytes: [u8; 8] = self.memory[addr..addr + 8].try_into().unwrap();
+                    self.registers[rd] = u64::from_le_bytes(bytes);
                 }
+                Ok(4)
             }
             OP_SW => {
-                let rs = self.memory[self.pc + 1] as usize;
-                let base = self.memory[self.pc + 2] as usize;
-                let offset = self.memory[self.pc + 3] as i8;
-                let addr = self.registers[base].wrapping_add_signed(offset as i8);
-                self.memory[addr as usize] = self.registers[rs];
+                let rs = self.memory[pc + 1] as usize;
+                let base_reg = self.memory[pc + 2] as usize;
+                let offset = self.memory[pc + 3] as i8 as i64;
+                let addr = self.registers[base_reg].wrapping_add(offset as u64) as usize;
+                let bytes = self.registers[rs].to_le_bytes();
+                self.memory[addr..addr + 8].copy_from_slice(&bytes);
+                Ok(4)
             }
+
+            OP_LDI => {
+                let rd = self.memory[pc + 1] as usize;
+                if rd > 0 {
+                    let value_addr = pc + 4;
+                    let bytes: [u8; 8] =
+                        self.memory[value_addr..value_addr + 8].try_into().unwrap();
+                    self.registers[rd] = u64::from_le_bytes(bytes);
+                }
+                Ok(12)
+            }
+
+            OP_BEQ => {
+                let rs1 = self.memory[pc + 1] as usize;
+                let rs2 = self.memory[pc + 2] as usize;
+                let offset = self.memory[pc + 3] as i8 as i64;
+                if self.registers[rs1] == self.registers[rs2] {
+                    self.pc = self.pc.wrapping_add(offset as u64);
+                }
+                Ok(4)
+            }
+
+            OP_JAL => {
+                let rd = self.memory[pc + 1] as usize;
+                let offset = i16::from_le_bytes([self.memory[pc + 2], self.memory[pc + 3]]) as i64;
+                if rd > 0 {
+                    self.registers[rd] = self.pc + 4;
+                }
+                self.pc = self.pc.wrapping_add(offset as u64);
+                Ok(4)
+            }
+
             OP_RET => {
-                self.pc = self.registers[1] as usize;
+                let return_address = self.registers[1];
+                if return_address == 0 {
+                    println!("RET from main context detected. Halting.");
+                    return Err(());
+                }
+                if return_address == self.pc {
+                    println!(
+                        "Infinite loop detected (RET to self at PC={:#x}). Halting.",
+                        self.pc
+                    );
+                    return Err(());
+                }
+                self.pc = return_address;
+                Ok(4)
             }
 
             _ => {
                 println!(
-                    "Unknown instruction: {:#04x} at PC {:#04x}. Halting.",
+                    "Unknown instruction: {:#04x} at PC {:#x}. Halting.",
                     instruction, self.pc
                 );
-                return false;
+                Err(())
             }
         }
-        true
     }
 
     pub fn print_state(&self) {
         println!("\n--- VM execution finished ---");
-        println!("Final pc value: {:#04x}", self.pc);
+        println!("Final pc value: {:#018x}", self.pc);
         println!("--- Final Register State ---");
-        println!("{:<4} {:<5}  {:<6}", "Reg", "(ABI)", "Value");
-        println!("{:-<4} {:-<5}  {:-<6}", "", "", ""); // Underline for the header
+        println!("{:<4} {:<5}  {:<18}", "Reg", "(ABI)", "Value");
+        println!("{:-<4} {:-<5}  {:-<18}", "", "", ""); // Underline for the header
 
         for i in 0..32 {
             let abi_name = match i {
@@ -168,9 +204,7 @@ impl VM {
                 11 => "a1",
                 _ => "",
             };
-
             let reg_name = format!("x{}", i);
-
             let abi_part = if !abi_name.is_empty() {
                 format!("({})", abi_name)
             } else {
@@ -178,7 +212,7 @@ impl VM {
             };
 
             println!(
-                "{:<4} {:<5}  {:#04x}",
+                "{:<4} {:<5}  {:#018x}",
                 reg_name, abi_part, self.registers[i]
             );
         }

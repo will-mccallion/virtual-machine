@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::process::exit;
 
-// Opcodes for RISC-V-like instruction set
+// Opcodes for our 64-bit RISC-V-like instruction set
 pub const OP_HALT: u8 = 0x00;
 pub const OP_ADD: u8 = 0x01;
 pub const OP_SUB: u8 = 0x02;
@@ -13,6 +13,7 @@ pub const OP_JAL: u8 = 0x05;
 pub const OP_LW: u8 = 0x06;
 pub const OP_SW: u8 = 0x07;
 pub const OP_RET: u8 = 0x08;
+pub const OP_LDI: u8 = 0x09;
 
 pub fn parse_command(program_args: &[String]) -> (String, String) {
     let mut input_file = String::new();
@@ -29,9 +30,7 @@ pub fn parse_command(program_args: &[String]) -> (String, String) {
                     exit(1);
                 }
             }
-            arg if !arg.starts_with('-') => {
-                input_file = arg.to_string();
-            }
+            arg if !arg.starts_with('-') => input_file = arg.to_string(),
             _ => { /* Ignore unknown flags */ }
         }
         i += 1;
@@ -54,48 +53,45 @@ pub fn read_file(input_path: &str) -> io::Result<String> {
 fn parse_memory_operand(operand: &str) -> Result<(i8, u8), &'static str> {
     let open_paren = operand.find('(').ok_or("Missing '(' in memory operand")?;
     let close_paren = operand.find(')').ok_or("Missing ')' in memory operand")?;
-
     let offset_str = &operand[..open_paren];
     let offset = offset_str
         .parse::<i8>()
         .map_err(|_| "Invalid memory offset")?;
-
     let base_reg_str = &operand[open_paren + 1..close_paren];
     let base_reg = parse_register(base_reg_str)?;
-
     Ok((offset, base_reg))
 }
 
 fn parse_register(reg_str: &str) -> Result<u8, &'static str> {
     let cleaned_reg = reg_str.trim_end_matches(',');
-
     match cleaned_reg {
-        "zero" => return Ok(0),
-        "ra" => return Ok(1),
-        "sp" => return Ok(2),
-        "t0" => return Ok(5),
-        "t1" => return Ok(6),
-        "t2" => return Ok(7),
-        "s0" => return Ok(8),
-        "s1" => return Ok(9),
-        "a0" => return Ok(10),
-        "a1" => return Ok(11),
-        _ => {}
-    }
-
-    if cleaned_reg.starts_with('x') {
-        match cleaned_reg[1..].parse::<u8>() {
-            Ok(num) if num < 32 => return Ok(num),
-            _ => return Err("Invalid register number (must be x0-x31)"),
+        "zero" => Ok(0),
+        "ra" => Ok(1),
+        "sp" => Ok(2),
+        "t0" => Ok(5),
+        "t1" => Ok(6),
+        "t2" => Ok(7),
+        "s0" => Ok(8),
+        "s1" => Ok(9),
+        "a0" => Ok(10),
+        "a1" => Ok(11),
+        _ => {
+            if cleaned_reg.starts_with('x') {
+                match cleaned_reg[1..].parse::<u8>() {
+                    Ok(num) if num < 32 => Ok(num),
+                    _ => Err("Invalid register number (must be x0-x31)"),
+                }
+            } else {
+                Err("Invalid register format")
+            }
         }
     }
-
-    Err("Invalid register format")
 }
 
 pub fn parse_program(program: String) -> Vec<u8> {
-    let mut symbol_table: HashMap<String, u32> = HashMap::new();
-    let mut current_address: u32 = 0;
+    let mut symbol_table: HashMap<String, u64> = HashMap::new();
+    let mut current_address: u64 = 0;
+
     for line in program.lines() {
         let line = line.split('#').next().unwrap_or("").trim();
         if line.is_empty() {
@@ -105,7 +101,9 @@ pub fn parse_program(program: String) -> Vec<u8> {
             let label = line.trim_end_matches(':').to_string();
             symbol_table.insert(label, current_address);
         } else {
-            current_address += 4;
+            let tokens: Vec<&str> = line.split_whitespace().collect();
+            let instruction = tokens[0].to_lowercase();
+            current_address += if instruction == "li" { 12 } else { 4 };
         }
     }
 
@@ -116,64 +114,64 @@ pub fn parse_program(program: String) -> Vec<u8> {
         if line.is_empty() || line.ends_with(':') {
             continue;
         }
+
         let tokens: Vec<&str> = line.split_whitespace().collect();
         let instruction = tokens[0].to_lowercase();
         let operands = &tokens[1..];
+
         match instruction.as_str() {
             "add" | "sub" => {
                 bin.push(if instruction == "add" { OP_ADD } else { OP_SUB });
-                let rd = parse_register(operands[0]).unwrap();
-                let rs1 = parse_register(operands[1]).unwrap();
-                let rs2 = parse_register(operands[2]).unwrap();
-                bin.extend_from_slice(&[rd, rs1, rs2]);
+                bin.extend_from_slice(&[
+                    parse_register(operands[0]).unwrap(),
+                    parse_register(operands[1]).unwrap(),
+                    parse_register(operands[2]).unwrap(),
+                ]);
             }
             "addi" => {
                 bin.push(OP_ADDI);
-                let rd = parse_register(operands[0]).unwrap();
-                let rs1 = parse_register(operands[1]).unwrap();
                 let immediate = operands[2].parse::<i8>().unwrap();
-                bin.extend_from_slice(&[rd, rs1, immediate as u8]);
+                bin.extend_from_slice(&[
+                    parse_register(operands[0]).unwrap(),
+                    parse_register(operands[1]).unwrap(),
+                    immediate as u8,
+                ]);
+            }
+            "li" => {
+                bin.push(OP_LDI);
+                let rd = parse_register(operands[0]).unwrap();
+                let immediate = operands[1].parse::<u64>().unwrap();
+                bin.push(rd);
+                bin.extend_from_slice(&[0, 0]);
+                bin.extend_from_slice(&immediate.to_le_bytes());
             }
             "beq" => {
                 bin.push(OP_BEQ);
-                let rs1 = parse_register(operands[0]).unwrap();
-                let rs2 = parse_register(operands[1]).unwrap();
-                let label = operands[2];
-                let target_address = *symbol_table.get(label).expect("Label not found");
-                let offset = target_address as i32 - current_address as i32;
+                let target_address = *symbol_table.get(operands[2]).expect("Label not found");
+                let offset = target_address as i64 - current_address as i64;
                 if offset > 127 || offset < -128 {
                     panic!("beq offset too large");
                 }
-                bin.extend_from_slice(&[rs1, rs2, offset as u8]);
+                bin.extend_from_slice(&[
+                    parse_register(operands[0]).unwrap(),
+                    parse_register(operands[1]).unwrap(),
+                    offset as u8,
+                ]);
             }
             "jal" => {
                 bin.push(OP_JAL);
-                let rd = parse_register(operands[0]).unwrap();
-                let label = operands[1];
-                let target_address = *symbol_table.get(label).expect("Label not found");
-                let offset = target_address as i32 - current_address as i32;
-
-                if offset < -32768 || offset > 32767 {
-                    panic!("jal offset is too large for 16 bits");
+                let target_address = *symbol_table.get(operands[1]).expect("Label not found");
+                let offset = target_address as i64 - current_address as i64;
+                if offset > 32767 || offset < -32768 {
+                    panic!("jal offset too large");
                 }
-
-                let offset_bytes = (offset as i16).to_le_bytes();
-
-                bin.extend_from_slice(&[rd, offset_bytes[0], offset_bytes[1]]);
+                bin.push(parse_register(operands[0]).unwrap());
+                bin.extend_from_slice(&(offset as i16).to_le_bytes());
             }
-            "sw" => {
-                bin.push(OP_SW);
-                let rs = parse_register(operands[0]).expect("Invalid source register for sw");
-                let (offset, base) =
-                    parse_memory_operand(operands[1]).expect("Invalid memory operand for sw");
-                bin.extend_from_slice(&[rs, base, offset as u8]);
-            }
-            "lw" => {
-                bin.push(OP_LW);
-                let rd = parse_register(operands[0]).expect("Invalid destination register for lw");
-                let (offset, base) =
-                    parse_memory_operand(operands[1]).expect("Invalid memory operand for lw");
-                bin.extend_from_slice(&[rd, base, offset as u8]);
+            "sw" | "lw" => {
+                bin.push(if instruction == "sw" { OP_SW } else { OP_LW });
+                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
+                bin.extend_from_slice(&[parse_register(operands[0]).unwrap(), base, offset as u8]);
             }
             "ret" => {
                 bin.push(OP_RET);
@@ -187,10 +185,11 @@ pub fn parse_program(program: String) -> Vec<u8> {
                 exit(2);
             }
         }
-        current_address += 4;
+        current_address += if instruction == "li" { 12 } else { 4 };
     }
     bin
 }
+
 pub fn save_assembly(output_path: &str, data: &[u8]) -> io::Result<()> {
     fs::write(output_path, data)
 }

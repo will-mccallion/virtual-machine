@@ -1,15 +1,15 @@
 main:
     jal ra, foo
-    halt
+    ret
 
 foo:
-    addi sp, sp, -4
+    addi sp, sp, -8
     sw ra, 0(sp)
 
     jal ra, bar
 
     lw ra, 0(sp)
-    addi sp, sp, 4
+    addi sp, sp, 8
 
     ret
 
