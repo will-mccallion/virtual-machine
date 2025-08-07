@@ -13,7 +13,7 @@ fib:
     addi t0, zero, 1
     beq a0, t0, end_fib
     addi t0, zero, 0
-    beq a0, t0, end_fin
+    beq a0, t0, end_fib
 
     add s0, a0, zero
 

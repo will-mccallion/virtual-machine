@@ -190,7 +190,7 @@ impl VM {
         println!("{:<4} {:<5}  {:<18}", "Reg", "(ABI)", "Value");
         println!("{:-<4} {:-<5}  {:-<18}", "", "", ""); // Underline for the header
 
-        for i in 0..32 {
+        for i in 0..16 {
             let abi_name = match i {
                 0 => "zero",
                 1 => "ra",
