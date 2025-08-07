@@ -9,6 +9,10 @@ pub const OP_ADD: u8 = 0x01;
 pub const OP_SUB: u8 = 0x02;
 pub const OP_ADDI: u8 = 0x03;
 pub const OP_BEQ: u8 = 0x04;
+pub const OP_JAL: u8 = 0x05;
+pub const OP_LW: u8 = 0x06;
+pub const OP_SW: u8 = 0x07;
+pub const OP_RET: u8 = 0x08;
 
 pub fn parse_command(program_args: &[String]) -> (String, String) {
     let mut input_file = String::new();
@@ -45,6 +49,21 @@ pub fn parse_command(program_args: &[String]) -> (String, String) {
 
 pub fn read_file(input_path: &str) -> io::Result<String> {
     fs::read_to_string(input_path)
+}
+
+fn parse_memory_operand(operand: &str) -> Result<(i8, u8), &'static str> {
+    let open_paren = operand.find('(').ok_or("Missing '(' in memory operand")?;
+    let close_paren = operand.find(')').ok_or("Missing ')' in memory operand")?;
+
+    let offset_str = &operand[..open_paren];
+    let offset = offset_str
+        .parse::<i8>()
+        .map_err(|_| "Invalid memory offset")?;
+
+    let base_reg_str = &operand[open_paren + 1..close_paren];
+    let base_reg = parse_register(base_reg_str)?;
+
+    Ok((offset, base_reg))
 }
 
 fn parse_register(reg_str: &str) -> Result<u8, &'static str> {
@@ -126,6 +145,39 @@ pub fn parse_program(program: String) -> Vec<u8> {
                     panic!("beq offset too large");
                 }
                 bin.extend_from_slice(&[rs1, rs2, offset as u8]);
+            }
+            "jal" => {
+                bin.push(OP_JAL);
+                let rd = parse_register(operands[0]).unwrap();
+                let label = operands[1];
+                let target_address = *symbol_table.get(label).expect("Label not found");
+                let offset = target_address as i32 - current_address as i32;
+
+                if offset < -32768 || offset > 32767 {
+                    panic!("jal offset is too large for 16 bits");
+                }
+
+                let offset_bytes = (offset as i16).to_le_bytes();
+
+                bin.extend_from_slice(&[rd, offset_bytes[0], offset_bytes[1]]);
+            }
+            "sw" => {
+                bin.push(OP_SW);
+                let rs = parse_register(operands[0]).expect("Invalid source register for sw");
+                let (offset, base) =
+                    parse_memory_operand(operands[1]).expect("Invalid memory operand for sw");
+                bin.extend_from_slice(&[rs, base, offset as u8]);
+            }
+            "lw" => {
+                bin.push(OP_LW);
+                let rd = parse_register(operands[0]).expect("Invalid destination register for lw");
+                let (offset, base) =
+                    parse_memory_operand(operands[1]).expect("Invalid memory operand for lw");
+                bin.extend_from_slice(&[rd, base, offset as u8]);
+            }
+            "ret" => {
+                bin.push(OP_RET);
+                bin.extend_from_slice(&[0, 0, 0]);
             }
             "halt" => {
                 bin.extend_from_slice(&[OP_HALT, 0, 0, 0]);

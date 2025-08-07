@@ -1,21 +1,15 @@
 const MEMORY_SIZE: usize = 1024;
 
-pub const ra: usize = 1;
-pub const sp: usize = 2;
-pub const t0: usize = 5;
-pub const t1: usize = 6;
-pub const t2: usize = 7;
-pub const s0: usize = 8;
-pub const s1: usize = 9;
-pub const a0: usize = 10;
-pub const a1: usize = 11;
-
 // Opcodes for RISC-V-like instruction set
 pub const OP_HALT: u8 = 0x00;
 pub const OP_ADD: u8 = 0x01;
 pub const OP_SUB: u8 = 0x02;
 pub const OP_ADDI: u8 = 0x03;
 pub const OP_BEQ: u8 = 0x04;
+pub const OP_JAL: u8 = 0x05;
+pub const OP_LW: u8 = 0x06;
+pub const OP_SW: u8 = 0x07;
+pub const OP_RET: u8 = 0x08;
 
 pub struct VM {
     registers: [u8; 32],
@@ -106,6 +100,40 @@ impl VM {
                 if val1 == val2 {
                     self.pc = self.pc.wrapping_add_signed(offset_byte as isize);
                 }
+            }
+
+            OP_JAL => {
+                let rd = self.memory[self.pc + 1] as usize;
+                let offset_low = self.memory[self.pc + 2];
+                let offset_high = self.memory[self.pc + 3];
+
+                let offset = i16::from_le_bytes([offset_low, offset_high]);
+
+                if rd > 0 {
+                    self.registers[rd] = (self.pc + 4) as u8;
+                }
+
+                self.pc = self.pc.wrapping_add_signed(offset as isize);
+            }
+
+            OP_LW => {
+                let rd = self.memory[self.pc + 1] as usize;
+                let base = self.memory[self.pc + 2] as usize;
+                let offset = self.memory[self.pc + 3] as i8;
+                if rd > 0 {
+                    let addr = self.registers[base].wrapping_add_signed(offset as i8);
+                    self.registers[rd] = self.memory[addr as usize];
+                }
+            }
+            OP_SW => {
+                let rs = self.memory[self.pc + 1] as usize;
+                let base = self.memory[self.pc + 2] as usize;
+                let offset = self.memory[self.pc + 3] as i8;
+                let addr = self.registers[base].wrapping_add_signed(offset as i8);
+                self.memory[addr as usize] = self.registers[rs];
+            }
+            OP_RET => {
+                self.pc = self.registers[1] as usize;
             }
 
             _ => {
