@@ -24,7 +24,6 @@ const FUNCT7_MULDIV: u32 = 0b0000001;
 // Custom HALT instruction
 pub const OP_HALT: u32 = 0x00000000;
 
-// --- (parse_command, read_file, parse_register, parse_memory_operand are unchanged) ---
 pub fn parse_command(program_args: &[String]) -> (String, String) {
     let mut input_file = String::new();
     let mut output_file = String::new();
@@ -126,7 +125,7 @@ fn encode_s_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 
     (imm11_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm4_0 << 7) | opcode
 }
 
-fn encode_b_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
+fn encode_sb_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
     let imm12 = (imm >> 12) & 1;
     let imm11 = (imm >> 11) & 1;
     let imm10_5 = (imm >> 5) & 0x3f;
@@ -136,7 +135,11 @@ fn encode_b_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 
     (imm_hi << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm_lo << 7) | opcode
 }
 
-fn encode_j_type(imm: u32, rd: u32, opcode: u32) -> u32 {
+fn encode_u_type(imm: u32, rd: u32, opcode: u32) -> u32 {
+    (imm << 12) | (rd << 7) | opcode
+}
+
+fn encode_uj_type(imm: u32, rd: u32, opcode: u32) -> u32 {
     let imm20 = (imm >> 20) & 1;
     let imm10_1 = (imm >> 1) & 0x3ff;
     let imm11 = (imm >> 11) & 1;
@@ -209,7 +212,7 @@ pub fn parse_program(program: String) -> Vec<u8> {
                 let rs2 = parse_register(operands[1]).unwrap();
                 let target_address = *symbol_table.get(operands[2]).expect("Label not found");
                 let offset = (target_address as i64 - current_address as i64) as u32;
-                encode_b_type(offset, rs2, rs1, 0b000, OP_BRANCH)
+                encode_sb_type(offset, rs2, rs1, 0b000, OP_BRANCH)
             }
             "jal" => {
                 let rd = parse_register(operands[0]).unwrap();
@@ -218,7 +221,7 @@ pub fn parse_program(program: String) -> Vec<u8> {
                     .get(*target_label)
                     .expect("JAL label not found");
                 let offset = (target_address as i64 - current_address as i64) as u32;
-                encode_j_type(offset, rd, OP_JAL)
+                encode_uj_type(offset, rd, OP_JAL)
             }
             "jalr" => encode_i_type(
                 0,

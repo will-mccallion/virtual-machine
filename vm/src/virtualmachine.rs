@@ -88,7 +88,7 @@ impl VM {
         ((imm as i32) << 20 >> 20) as i64
     }
 
-    fn decode_b_imm(&self, inst: u32) -> i64 {
+    fn decode_sb_imm(&self, inst: u32) -> i64 {
         let imm12 = (inst >> 31) & 1;
         let imm11 = (inst >> 7) & 1;
         let imm10_5 = (inst >> 25) & 0x3F;
@@ -97,7 +97,11 @@ impl VM {
         ((offset as i32) << 19 >> 19) as i64
     }
 
-    fn decode_j_imm(&self, inst: u32) -> i64 {
+    fn decode_u_imm(&self, inst: u32) -> i64 {
+        (inst >> 12) as i64
+    }
+
+    fn decode_uj_imm(&self, inst: u32) -> i64 {
         let imm20 = (inst >> 31) & 1;
         let imm10_1 = (inst >> 21) & 0x3FF;
         let imm11 = (inst >> 20) & 1;
@@ -178,7 +182,7 @@ impl VM {
             }
             OP_BRANCH => {
                 if funct3 == FUNCT3_BEQ {
-                    let offset = self.decode_b_imm(inst);
+                    let offset = self.decode_sb_imm(inst);
                     if self.registers[rs1] == self.registers[rs2] {
                         next_pc = self.pc.wrapping_add(offset as u64);
                     }
@@ -188,7 +192,7 @@ impl VM {
                 if rd > 0 {
                     self.registers[rd] = next_pc;
                 }
-                let offset = self.decode_j_imm(inst);
+                let offset = self.decode_uj_imm(inst);
                 next_pc = self.pc.wrapping_add(offset as u64);
             }
             OP_JALR => {
