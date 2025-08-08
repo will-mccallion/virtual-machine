@@ -4,7 +4,6 @@ use std::io;
 use std::process::exit;
 
 // --- RISC-V Instruction Constants ---
-// Opcodes
 const OP_LOAD: u32 = 0b0000011;
 const OP_IMM: u32 = 0b0010011;
 const OP_STORE: u32 = 0b0100011;
@@ -14,41 +13,18 @@ const OP_JALR: u32 = 0b1100111;
 const OP_JAL: u32 = 0b1101111;
 const OP_SYSTEM: u32 = 0b1110011;
 
-// Funct3/Funct7/Funct12
-const FUNCT3_LW: u32 = 0b010;
-const FUNCT3_SW: u32 = 0b010;
-const FUNCT3_BEQ: u32 = 0b000;
+// Funct3/Funct7
 const FUNCT3_ADD_SUB: u32 = 0b000;
 const FUNCT7_ADD: u32 = 0b0000000;
 const FUNCT7_SUB: u32 = 0b0100000;
-const FUNCT3_ADDI: u32 = 0b000;
-const FUNCT12_ECALL: u32 = 0x0;
+const FUNCT3_MUL: u32 = 0b000;
+const FUNCT3_DIV: u32 = 0b100;
+const FUNCT7_MULDIV: u32 = 0b0000001;
 
-// --- CSR Addresses for Printing ---
-// Machine-Level
-const MSTATUS: usize = 0x300;
-const MISA: usize = 0x301;
-const MIE: usize = 0x304;
-const MTVEC: usize = 0x305;
-const MSCRATCH: usize = 0x340;
-const MEPC: usize = 0x341;
-const MCAUSE: usize = 0x342;
-const MTVAL: usize = 0x343;
-const MIP: usize = 0x344;
-// Supervisor-Level
-const SSTATUS: usize = 0x100;
-const SIE: usize = 0x104;
-const STVEC: usize = 0x105;
-const SSCRATCH: usize = 0x140;
-const SEPC: usize = 0x141;
-const SCAUSE: usize = 0x142;
-const STVAL: usize = 0x143;
-const SIP: usize = 0x144;
-const SATP: usize = 0x180;
-
-// Custom HALT instruction (encoded as an illegal instruction)
+// Custom HALT instruction
 pub const OP_HALT: u32 = 0x00000000;
 
+// --- (parse_command, read_file, parse_register, parse_memory_operand are unchanged) ---
 pub fn parse_command(program_args: &[String]) -> (String, String) {
     let mut input_file = String::new();
     let mut output_file = String::new();
@@ -135,6 +111,7 @@ fn parse_memory_operand(operand: &str) -> Result<(i32, u32), &'static str> {
     Ok((offset, base_reg))
 }
 
+// --- Encoder Functions ---
 fn encode_r_type(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
     (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
 }
@@ -197,14 +174,19 @@ pub fn parse_program(program: String) -> Vec<u8> {
         let operands = &tokens[1..];
 
         let encoded_inst = match instruction.as_str() {
-            "add" => encode_r_type(
-                0b0000000,
-                parse_register(operands[2]).unwrap(),
-                parse_register(operands[1]).unwrap(),
-                0b000,
-                parse_register(operands[0]).unwrap(),
-                OP_REG,
-            ),
+            "add" | "sub" | "mul" | "div" => {
+                let rd = parse_register(operands[0]).unwrap();
+                let rs1 = parse_register(operands[1]).unwrap();
+                let rs2 = parse_register(operands[2]).unwrap();
+                let (funct7, funct3) = match instruction.as_str() {
+                    "add" => (FUNCT7_ADD, FUNCT3_ADD_SUB),
+                    "sub" => (FUNCT7_SUB, FUNCT3_ADD_SUB),
+                    "mul" => (FUNCT7_MULDIV, FUNCT3_MUL),
+                    "div" => (FUNCT7_MULDIV, FUNCT3_DIV),
+                    _ => unreachable!(),
+                };
+                encode_r_type(funct7, rs2, rs1, funct3, rd, OP_REG)
+            }
             "addi" => encode_i_type(
                 operands[2].parse::<i32>().unwrap() as u32,
                 parse_register(operands[1]).unwrap(),

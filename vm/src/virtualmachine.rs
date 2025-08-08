@@ -17,9 +17,14 @@ const FUNCT3_LW: u32 = 0b010;
 const FUNCT3_SW: u32 = 0b010;
 const FUNCT3_BEQ: u32 = 0b000;
 const FUNCT3_ADD_SUB: u32 = 0b000;
+const FUNCT3_MUL: u32 = 0b000;
+const FUNCT3_DIV: u32 = 0b100;
+const FUNCT3_ADDI: u32 = 0b000;
+
+const FUNCT7_MULDIV: u32 = 0b0000001;
 const FUNCT7_ADD: u32 = 0b0000000;
 const FUNCT7_SUB: u32 = 0b0100000;
-const FUNCT3_ADDI: u32 = 0b000;
+
 const FUNCT12_ECALL: u32 = 0x0;
 
 // --- CSR Addresses for Printing ---
@@ -72,24 +77,48 @@ impl VM {
         u32::from_le_bytes(self.memory[pc..pc + 4].try_into().unwrap())
     }
 
+    fn decode_i_imm(&self, inst: u32) -> i64 {
+        (inst as i32 >> 20) as i64
+    }
+
+    fn decode_s_imm(&self, inst: u32) -> i64 {
+        let imm4_0 = (inst >> 7) & 0x1F;
+        let imm11_5 = (inst >> 25) & 0x7F;
+        let imm = (imm11_5 << 5) | imm4_0;
+        ((imm as i32) << 20 >> 20) as i64
+    }
+
+    fn decode_b_imm(&self, inst: u32) -> i64 {
+        let imm12 = (inst >> 31) & 1;
+        let imm11 = (inst >> 7) & 1;
+        let imm10_5 = (inst >> 25) & 0x3F;
+        let imm4_1 = (inst >> 8) & 0xF;
+        let offset = (imm12 << 12) | (imm11 << 11) | (imm10_5 << 5) | (imm4_1 << 1);
+        ((offset as i32) << 19 >> 19) as i64
+    }
+
+    fn decode_j_imm(&self, inst: u32) -> i64 {
+        let imm20 = (inst >> 31) & 1;
+        let imm10_1 = (inst >> 21) & 0x3FF;
+        let imm11 = (inst >> 20) & 1;
+        let imm19_12 = (inst >> 12) & 0xFF;
+        let offset = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
+        ((offset as i32) << 11 >> 11) as i64
+    }
+
     pub fn run(&mut self) {
         loop {
             if self.pc as usize >= MEMORY_SIZE {
-                println!("PC out of bounds. Halting.");
+                println!("PC exceeding memory.");
                 break;
             }
-
             let instruction = self.fetch();
-
             if instruction == 0x00000000 {
-                println!("HALT instruction encountered. VM is stopping.");
                 break;
             }
-
             if !self.execute(instruction) {
                 break;
             }
-
             self.registers[0] = 0;
         }
     }
@@ -109,24 +138,31 @@ impl VM {
                 if rd > 0 {
                     let val1 = self.registers[rs1];
                     let val2 = self.registers[rs2];
-                    if funct3 == FUNCT3_ADD_SUB {
-                        match funct7 {
-                            FUNCT7_ADD => self.registers[rd] = val1.wrapping_add(val2),
-                            FUNCT7_SUB => self.registers[rd] = val1.wrapping_sub(val2),
-                            _ => println!("Unsupported REG funct7: {:#b}", funct7),
+                    match (funct3, funct7) {
+                        (FUNCT3_ADD_SUB, FUNCT7_ADD) => {
+                            self.registers[rd] = val1.wrapping_add(val2)
                         }
+                        (FUNCT3_ADD_SUB, FUNCT7_SUB) => {
+                            self.registers[rd] = val1.wrapping_sub(val2)
+                        }
+                        (FUNCT3_MUL, FUNCT7_MULDIV) => self.registers[rd] = val1.wrapping_mul(val2),
+                        (FUNCT3_DIV, FUNCT7_MULDIV) => self.registers[rd] = val1.wrapping_div(val2),
+                        _ => println!(
+                            "Unsupported R-type: funct3={:#b}, funct7={:#b}",
+                            funct3, funct7
+                        ),
                     }
                 }
             }
             OP_IMM => {
                 if rd > 0 && funct3 == FUNCT3_ADDI {
-                    let imm = (inst as i32 >> 20) as i64 as u64;
-                    self.registers[rd] = self.registers[rs1].wrapping_add(imm);
+                    let imm = self.decode_i_imm(inst);
+                    self.registers[rd] = self.registers[rs1].wrapping_add(imm as u64);
                 }
             }
             OP_LOAD => {
                 if rd > 0 && funct3 == FUNCT3_LW {
-                    let imm = (inst as i32 >> 20) as i64;
+                    let imm = self.decode_i_imm(inst);
                     let addr = self.registers[rs1].wrapping_add(imm as u64) as usize;
                     let bytes: [u8; 4] = self.memory[addr..addr + 4].try_into().unwrap();
                     self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
@@ -134,9 +170,7 @@ impl VM {
             }
             OP_STORE => {
                 if funct3 == FUNCT3_SW {
-                    let imm4_0 = (inst >> 7) & 0x1F;
-                    let imm11_5 = (inst >> 25) & 0x7F;
-                    let imm = (((imm11_5 << 5) | imm4_0) as i32) as i64;
+                    let imm = self.decode_s_imm(inst);
                     let addr = self.registers[rs1].wrapping_add(imm as u64) as usize;
                     let data = self.registers[rs2] as u32;
                     self.memory[addr..addr + 4].copy_from_slice(&data.to_le_bytes());
@@ -144,13 +178,7 @@ impl VM {
             }
             OP_BRANCH => {
                 if funct3 == FUNCT3_BEQ {
-                    let imm12 = (inst >> 31) & 1;
-                    let imm11 = (inst >> 7) & 1;
-                    let imm10_5 = (inst >> 25) & 0x3F;
-                    let imm4_1 = (inst >> 8) & 0xF;
-                    let offset = (imm12 << 12) | (imm11 << 11) | (imm10_5 << 5) | (imm4_1 << 1);
-                    let offset = ((offset as i32) << 19 >> 19) as i64;
-
+                    let offset = self.decode_b_imm(inst);
                     if self.registers[rs1] == self.registers[rs2] {
                         next_pc = self.pc.wrapping_add(offset as u64);
                     }
@@ -160,19 +188,14 @@ impl VM {
                 if rd > 0 {
                     self.registers[rd] = next_pc;
                 }
-                let imm20 = (inst >> 31) & 1;
-                let imm10_1 = (inst >> 21) & 0x3FF;
-                let imm11 = (inst >> 20) & 1;
-                let imm19_12 = (inst >> 12) & 0xFF;
-                let offset = (imm20 << 20) | (imm19_12 << 12) | (imm11 << 11) | (imm10_1 << 1);
-                let offset = ((offset as i32) << 11 >> 11) as i64;
+                let offset = self.decode_j_imm(inst);
                 next_pc = self.pc.wrapping_add(offset as u64);
             }
             OP_JALR => {
                 if rd > 0 {
                     self.registers[rd] = next_pc;
                 }
-                let imm = (inst as i32 >> 20) as i64;
+                let imm = self.decode_i_imm(inst);
                 next_pc = self.registers[rs1].wrapping_add(imm as u64) & !1;
             }
             OP_SYSTEM => {
