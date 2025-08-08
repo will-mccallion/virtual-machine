@@ -22,6 +22,8 @@ const FUNCT3_SW: u32 = 0b010;
 const FUNCT3_BEQ: u32 = 0b000;
 const FUNCT3_BLT: u32 = 0b100;
 const FUNCT3_BNE: u32 = 0b001;
+const FUNCT3_SD: u32 = 0b011;
+const FUNCT3_LD: u32 = 0b011;
 
 const FUNCT7_MULDIV: u32 = 0b0000001;
 const FUNCT7_ADD: u32 = 0b0000000;
@@ -167,21 +169,39 @@ impl VM {
                 }
             }
             OP_LOAD => {
-                if rd > 0 && funct3 == FUNCT3_LW {
-                    let imm = self.decode_i_imm(inst);
-                    let addr = self.registers[rs1].wrapping_add(imm as u64) as usize;
-                    let bytes: [u8; 4] = self.memory[addr..addr + 4].try_into().unwrap();
-                    self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
+                if rd > 0 {
+                    match funct3 {
+                        FUNCT3_LW => {
+                            let imm = self.decode_i_imm(inst);
+                            let addr = self.registers[rs1].wrapping_add(imm as u64) as usize;
+                            let bytes: [u8; 4] = self.memory[addr..addr + 4].try_into().unwrap();
+                            self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
+                        }
+                        FUNCT3_LD => {
+                            let imm = self.decode_i_imm(inst);
+                            let addr = self.registers[rs1].wrapping_add(imm as u64) as usize;
+                            let bytes: [u8; 8] = self.memory[addr..addr + 8].try_into().unwrap();
+                            self.registers[rd] = i64::from_le_bytes(bytes) as i64 as u64;
+                        }
+                        _ => {}
+                    }
                 }
             }
-            OP_STORE => {
-                if funct3 == FUNCT3_SW {
+            OP_STORE => match funct3 {
+                FUNCT3_SW => {
                     let imm = self.decode_s_imm(inst);
                     let addr = self.registers[rs1].wrapping_add(imm as u64) as usize;
                     let data = self.registers[rs2] as u32;
                     self.memory[addr..addr + 4].copy_from_slice(&data.to_le_bytes());
                 }
-            }
+                FUNCT3_SD => {
+                    let imm = self.decode_s_imm(inst);
+                    let addr = self.registers[rs1].wrapping_add(imm as u64) as usize;
+                    let data = self.registers[rs2];
+                    self.memory[addr..addr + 8].copy_from_slice(&data.to_le_bytes());
+                }
+                _ => {}
+            },
             OP_BRANCH => match funct3 {
                 FUNCT3_BEQ => {
                     let offset = self.decode_sb_imm(inst);

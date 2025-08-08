@@ -23,6 +23,8 @@ const FUNCT3_SW: u32 = 0b010;
 const FUNCT3_BEQ: u32 = 0b000;
 const FUNCT3_BLT: u32 = 0b100;
 const FUNCT3_BNE: u32 = 0b001;
+const FUNCT3_LD: u32 = 0b011;
+const FUNCT3_SD: u32 = 0b011;
 
 const FUNCT7_MULDIV: u32 = 0b0000001;
 const FUNCT7_ADD: u32 = 0b0000000;
@@ -213,6 +215,16 @@ pub fn parse_program(program: String) -> Vec<u8> {
                 let rs2 = parse_register(operands[0]).unwrap();
                 let (offset, base) = parse_memory_operand(operands[1]).unwrap();
                 encode_s_type(offset as u32, rs2, base, FUNCT3_SW, OP_STORE)
+            }
+            "ld" => {
+                let rd = parse_register(operands[0]).unwrap();
+                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
+                encode_i_type(offset as u32, base, FUNCT3_LD, rd, OP_LOAD)
+            }
+            "sd" => {
+                let rs2 = parse_register(operands[0]).unwrap();
+                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
+                encode_s_type(offset as u32, rs2, base, FUNCT3_SD, OP_STORE)
             }
             "beq" => {
                 let rs1 = parse_register(operands[0]).unwrap();

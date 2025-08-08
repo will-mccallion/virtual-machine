@@ -61,6 +61,8 @@ The VM uses the standard 32-bit RISC-V instruction formats. Unlike a simpler des
 | `mul`    | Multiplies the values in two source registers.                            | R-Type       |
 | `div`    | Divides the value in `rs1` by `rs2`.                                      | R-Type       |
 | `addi`   | Adds a 12-bit sign-extended immediate to a register.                      | I-Type       |
+| `ld`     | Loads a 64-bit word from memory.                                          | I-Type       |
+| `sd`     | Stores a 64-bit word from a register into memory.                         | S-Type       |
 | `lw`     | Loads a 32-bit word from memory and sign-extends it to 64 bits.           | I-Type       |
 | `sw`     | Stores a 32-bit word from a register into memory.                         | S-Type       |
 | `beq`    | Branches to a new address if two registers are equal.                     | SB-Type      |
