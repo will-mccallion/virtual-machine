@@ -50,23 +50,23 @@ The 128 MB memory space is a single contiguous block. On startup, the VM initial
 
 ## 4. Instruction Set Architecture
 
-The VM uses the standard 32-bit RISC-V instruction formats. Unlike a simpler design where the first byte is always the opcode, RISC-V uses different formats (R, I, S, B, J, U) to efficiently encode operands. The assembler and VM correctly handle the bit-level encoding and decoding of these formats.
+The VM uses the standard 32-bit RISC-V instruction formats. Unlike a simpler design where the first byte is always the opcode, RISC-V uses different formats (R, I, S, SB, UJ, U) to efficiently encode operands. The assembler and VM correctly handle the bit-level encoding and decoding of these formats.
 
 ### Implemented Instructions (RV64IM Subset)
 
-| Mnemonic | Description                                                               | Format Type |
-| :------- | :------------------------------------------------------------------------ | :---------- |
-| `add`    | Adds the values in two source registers.                                  | R-Type      |
-| `sub`    | Subtracts the values in two source registers.                             | R-Type      |
-| `mul`    | Multiplies the values in two source registers.                            | R-Type      |
-| `div`    | Divides the value in `rs1` by `rs2`.                                      | R-Type      |
-| `addi`   | Adds a 12-bit sign-extended immediate to a register.                      | I-Type      |
-| `lw`     | Loads a 32-bit word from memory and sign-extends it to 64 bits.           | I-Type      |
-| `sw`     | Stores a 32-bit word from a register into memory.                         | S-Type      |
-| `beq`    | Branches to a new address if two registers are equal.                     | B-Type      |
-| `jal`    | Jumps to a new address, storing the return address in `rd`.               | J-Type      |
-| `jalr`   | Jumps to an address in a register, storing the return address in `rd`.    | I-Type      |
-| `ecall`  | Triggers an environment call (system call) to the host OS/kernel.         | I-Type      |
+| Mnemonic | Description                                                               | Format Type  |
+| :------- | :------------------------------------------------------------------------ | :----------  |
+| `add`    | Adds the values in two source registers.                                  | R-Type       |
+| `sub`    | Subtracts the values in two source registers.                             | R-Type       |
+| `mul`    | Multiplies the values in two source registers.                            | R-Type       |
+| `div`    | Divides the value in `rs1` by `rs2`.                                      | R-Type       |
+| `addi`   | Adds a 12-bit sign-extended immediate to a register.                      | I-Type       |
+| `lw`     | Loads a 32-bit word from memory and sign-extends it to 64 bits.           | I-Type       |
+| `sw`     | Stores a 32-bit word from a register into memory.                         | S-Type       |
+| `beq`    | Branches to a new address if two registers are equal.                     | SB-Type      |
+| `jal`    | Jumps to a new address, storing the return address in `rd`.               | UJ-Type      |
+| `jalr`   | Jumps to an address in a register, storing the return address in `rd`.    | I-Type       |
+| `ecall`  | Triggers an environment call (system call) to the host OS/kernel.         | I-Type       |
 
 ### Pseudo-Instructions
 
