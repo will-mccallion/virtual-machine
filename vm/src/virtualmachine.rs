@@ -1,6 +1,7 @@
 const MEMORY_SIZE: usize = 10240;
 
 // Opcodes for our 64-bit RISC-V-like instruction set
+pub const OP_HALT: u8 = 0x00;
 pub const OP_ADD: u8 = 0x01;
 pub const OP_SUB: u8 = 0x02;
 pub const OP_ADDI: u8 = 0x03;
@@ -10,6 +11,9 @@ pub const OP_LW: u8 = 0x06;
 pub const OP_SW: u8 = 0x07;
 pub const OP_RET: u8 = 0x08;
 pub const OP_LDI: u8 = 0x09;
+pub const OP_MUL: u8 = 0x0a;
+pub const OP_DIV: u8 = 0x0b;
+pub const OP_ECALL: u8 = 0xFF;
 
 pub struct VM {
     registers: [u64; 32],
@@ -70,18 +74,25 @@ impl VM {
         let instruction = self.memory[pc];
 
         match instruction {
-            OP_ADD | OP_SUB => {
+            OP_HALT => {
+                println!("HALT instruction encountered. VM is stopping.");
+                Err(())
+            }
+
+            OP_ADD | OP_SUB | OP_MUL | OP_DIV => {
                 let rd = self.memory[pc + 1] as usize;
                 let rs1 = self.memory[pc + 2] as usize;
                 let rs2 = self.memory[pc + 3] as usize;
                 if rd > 0 {
                     let val1 = self.registers[rs1];
                     let val2 = self.registers[rs2];
-                    if instruction == OP_ADD {
-                        self.registers[rd] = val1.wrapping_add(val2);
-                    } else {
-                        self.registers[rd] = val1.wrapping_sub(val2);
-                    }
+                    match instruction {
+                        OP_ADD => self.registers[rd] = val1.wrapping_add(val2),
+                        OP_SUB => self.registers[rd] = val1.wrapping_sub(val2),
+                        OP_MUL => self.registers[rd] = val1.wrapping_mul(val2),
+                        OP_DIV => self.registers[rd] = val1.wrapping_div(val2),
+                        _ => {}
+                    };
                 }
                 Ok(4)
             }
@@ -166,6 +177,10 @@ impl VM {
                 Ok(4)
             }
 
+            OP_ECALL => {
+                todo!()
+            }
+
             _ => {
                 println!(
                     "Unknown instruction: {:#04x} at PC {:#x}. Halting.",
@@ -181,13 +196,15 @@ impl VM {
         println!("Final pc value: {:#018x}", self.pc);
         println!("--- Final Register State ---");
         println!("{:<4} {:<5}  {:<18}", "Reg", "(ABI)", "Value");
-        println!("{:-<4} {:-<5}  {:-<18}", "", "", ""); // Underline for the header
+        println!("{:-<4} {:-<5}  {:-<18}", "", "", "");
 
-        for i in 0..16 {
+        for i in 0..32 {
             let abi_name = match i {
                 0 => "zero",
                 1 => "ra",
                 2 => "sp",
+                3 => "gp",
+                4 => "tp",
                 5 => "t0",
                 6 => "t1",
                 7 => "t2",
@@ -195,14 +212,31 @@ impl VM {
                 9 => "s1",
                 10 => "a0",
                 11 => "a1",
+                12 => "a2",
+                13 => "a3",
+                14 => "a4",
+                15 => "a5",
+                16 => "a6",
+                17 => "a7",
+                18 => "s2",
+                19 => "s3",
+                20 => "s4",
+                21 => "s5",
+                22 => "s6",
+                23 => "s7",
+                24 => "s8",
+                25 => "s9",
+                26 => "s10",
+                27 => "s11",
+                28 => "t3",
+                29 => "t4",
+                30 => "t5",
+                31 => "t6",
                 _ => "",
             };
+
             let reg_name = format!("x{}", i);
-            let abi_part = if !abi_name.is_empty() {
-                format!("({})", abi_name)
-            } else {
-                String::new()
-            };
+            let abi_part = format!("({})", abi_name);
 
             println!(
                 "{:<4} {:<5}  {:#018x}",

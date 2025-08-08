@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-The Rusteze VM is a simple **64-bit** RISC-inspired virtual machine. It features a fixed-size base instruction set, a general-purpose register file, and a small, byte-addressable memory space. It is designed to be simple and educational while modeling key concepts of modern 64-bit architectures.
+The Rusteze VM is a simple **64-bit** RISC-inspired virtual machine. It features a fixed-size base instruction set, a general-purpose register file, and a small, byte-addressable memory space.
 
 -   **Architecture:** 64-bit (64-bit data path and registers).
 -   **Instruction Size:** Base instructions are fixed at 4 bytes (32 bits). Special instructions for loading large constants exist.
@@ -12,23 +12,26 @@ The Rusteze VM is a simple **64-bit** RISC-inspired virtual machine. It features
 
 ## 2. Registers
 
-The VM has 32 general-purpose 64-bit registers, `x0` through `x31`. By software convention (ABI), several registers have special roles.
+The VM has 32 general-purpose 64-bit registers, `x0` through `x31`. The standard RISC-V integer calling convention gives them the following names and roles.
 
 | Register | ABI Name | Description                                         | Saved By |
 | :------- | :------- | :-------------------------------------------------- | :------- |
-| `x0`     | `zero`   | Hardwired to `0`. Writes are ignored.             | -        |
+| `x0`     | `zero`   | Hardwired to `0`.                                   | -        |
 | `x1`     | `ra`     | **Return Address** for function calls.              | Caller   |
 | `x2`     | `sp`     | **Stack Pointer**.                                  | Callee   |
-| `x3-x4`  |          | (Reserved)                                        | -        |
+| `x3`     | `gp`     | **Global Pointer**.                                 | -        |
+| `x4`     | `tp`     | **Thread Pointer**.                                 | -        |
 | `x5-x7`  | `t0-t2`  | Temporary / scratch registers.                      | Caller   |
-| `x8-x9`  | `s0-s1`  | Saved registers. Must be restored before returning. | Callee   |
-| `x10-x11`| `a0-a1`  | Function **Arguments** and **Return Values**.       | Caller   |
-| `x12-x31`|          | (Available for general use)                         | -        |
+| `x8-x9`  | `s0-s1`  | Saved ("callee-saved") registers.                   | Callee   |
+| `x10-x17`| `a0-a7`  | Function **Arguments** and **Return Values**.       | Caller   |
+| `x18-x27`| `s2-s11` | More Saved registers.                               | Callee   |
+| `x28-x31`| `t3-t6`  | More Temporary registers.                           | Caller   |
 
--   **Caller-Saved:** If the calling function needs the value in this register after the call returns, it must save it to the stack before the call.
--   **Callee-Saved:** The called function (the "callee") must guarantee that these registers have the same value when it returns as they did when it was called.
 
-## 3. Memory Layout
+-   **Caller-Saved:** If the calling function needs the value in this register after the call returns, it must save it to the stack before the call. (`ra`, `t0-t6`, `a0-a7`)
+-   **Callee-Saved:** The called function (the "callee") must guarantee that these registers have the same value when it returns as they did when it was called. (`sp`, `s0-s11`)
+
+## 3. Memory Layout## 3. Memory Layout
 
 The 1024-byte memory is a single contiguous block. The bootloader initializes the stack pointer (`sp`) to the end of memory.
 
@@ -127,6 +130,32 @@ Base instructions are 4 bytes. The first byte is the opcode, followed by three b
 
 -   **Syntax:** `li rd, immediate`
 -   **Description:** The user-friendly way to load any 64-bit constant into a register. The assembler translates this into an `ldi` instruction.
+
+### `mul` - Multiply
+
+-   **Opcode:** `0x0A`
+-   **Syntax:** `mul rd, rs1, rs2`
+-   **Description:** Multiplies the 64-bit value in `rs1` by the value in `rs2` and stores the lower 64 bits of the result in `rd`.
+-   **Encoding:** `[0x0A, rd, rs1, rs2]`
+
+---
+
+### `div` - Divide
+
+-   **Opcode:** `0x0B`
+-   **Syntax:** `div rd, rs1, rs2`
+-   **Description:** Divides the 64-bit value in `rs1` by the value in `rs2` and stores the integer result (quotient) in `rd`.
+-   **Note:** Behavior for division by zero is undefined in the current VM. A future version should trigger an exception.
+-   **Encoding:** `[0x0B, rd, rs1, rs2]`
+
+---
+
+### `ecall` - Environment Call (System Call)
+
+-   **Opcode:** `0xFF`
+-   **Syntax:** `ecall`
+-   **Description:** Used to request a service from the operating system (the 'environment'). When executed, the VM halts normal execution and jumps to a predefined system trap handler address (e.g., `0x100`). The specific service requested is determined by software convention, typically by a value passed in register `a0` or `a7`. This is the primary mechanism for a program to interact with the kernel.
+-   **Encoding:** `[0xFF, 0x00, 0x00, 0x00]`
 
 ## 5. Calling Convention
 

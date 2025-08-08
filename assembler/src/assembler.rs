@@ -14,6 +14,9 @@ pub const OP_LW: u8 = 0x06;
 pub const OP_SW: u8 = 0x07;
 pub const OP_RET: u8 = 0x08;
 pub const OP_LDI: u8 = 0x09;
+pub const OP_MUL: u8 = 0x0a;
+pub const OP_DIV: u8 = 0x0b;
+pub const OP_ECALL: u8 = 0xFF;
 
 pub fn parse_command(program_args: &[String]) -> (String, String) {
     let mut input_file = String::new();
@@ -68,13 +71,41 @@ fn parse_register(reg_str: &str) -> Result<u8, &'static str> {
         "zero" => Ok(0),
         "ra" => Ok(1),
         "sp" => Ok(2),
+        "gp" => Ok(3),
+        "tp" => Ok(4),
+
         "t0" => Ok(5),
         "t1" => Ok(6),
         "t2" => Ok(7),
+
         "s0" => Ok(8),
         "s1" => Ok(9),
+
         "a0" => Ok(10),
         "a1" => Ok(11),
+        "a2" => Ok(12),
+        "a3" => Ok(13),
+        "a4" => Ok(14),
+        "a5" => Ok(15),
+        "a6" => Ok(16),
+        "a7" => Ok(17),
+
+        "s2" => Ok(18),
+        "s3" => Ok(19),
+        "s4" => Ok(20),
+        "s5" => Ok(21),
+        "s6" => Ok(22),
+        "s7" => Ok(23),
+        "s8" => Ok(24),
+        "s9" => Ok(25),
+        "s10" => Ok(26),
+        "s11" => Ok(27),
+
+        "t3" => Ok(28),
+        "t4" => Ok(29),
+        "t5" => Ok(30),
+        "t6" => Ok(31),
+
         _ => {
             if cleaned_reg.starts_with('x') {
                 match cleaned_reg[1..].parse::<u8>() {
@@ -120,8 +151,14 @@ pub fn parse_program(program: String) -> Vec<u8> {
         let operands = &tokens[1..];
 
         match instruction.as_str() {
-            "add" | "sub" => {
-                bin.push(if instruction == "add" { OP_ADD } else { OP_SUB });
+            "add" | "sub" | "mul" | "div" => {
+                match instruction.as_str() {
+                    "add" => bin.push(OP_ADD),
+                    "sub" => bin.push(OP_SUB),
+                    "mul" => bin.push(OP_MUL),
+                    "div" => bin.push(OP_DIV),
+                    _ => {}
+                }
                 bin.extend_from_slice(&[
                     parse_register(operands[0]).unwrap(),
                     parse_register(operands[1]).unwrap(),
@@ -176,6 +213,9 @@ pub fn parse_program(program: String) -> Vec<u8> {
             "ret" => {
                 bin.push(OP_RET);
                 bin.extend_from_slice(&[0, 0, 0]);
+            }
+            "ecall" => {
+                bin.extend_from_slice(&[OP_ECALL, 0, 0, 0]);
             }
             "halt" => {
                 bin.extend_from_slice(&[OP_HALT, 0, 0, 0]);
