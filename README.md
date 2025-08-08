@@ -64,6 +64,8 @@ The VM uses the standard 32-bit RISC-V instruction formats. Unlike a simpler des
 | `lw`     | Loads a 32-bit word from memory and sign-extends it to 64 bits.           | I-Type       |
 | `sw`     | Stores a 32-bit word from a register into memory.                         | S-Type       |
 | `beq`    | Branches to a new address if two registers are equal.                     | SB-Type      |
+| `blt`    | Branches to a new address if the left register is less than the right.    | SB-Type      |
+| `bne`    | Branches to a new address if two registers are not equal.                 | SB-Type      |
 | `jal`    | Jumps to a new address, storing the return address in `rd`.               | UJ-Type      |
 | `jalr`   | Jumps to an address in a register, storing the return address in `rd`.    | I-Type       |
 | `ecall`  | Triggers an environment call (system call) to the host OS/kernel.         | I-Type       |

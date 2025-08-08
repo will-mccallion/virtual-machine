@@ -19,10 +19,8 @@ fib:
     sw s1, 4(sp)
     sw ra, 8(sp)
 
-    addi t0, zero, 1
-    beq a0, t0, end_fib     # If n == 1 goto end_fib
-    addi t0, zero, 0
-    beq a0, t0, end_fib     # If n == 0 goto end_fib
+    addi t0, zero, 2
+    blt a0, t0, end_fib     # If n < 2 goto end_fib
 
     add s0, a0, zero        # s0 (n) <- a0
 

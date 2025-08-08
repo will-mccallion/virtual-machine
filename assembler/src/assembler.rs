@@ -15,11 +15,18 @@ const OP_SYSTEM: u32 = 0b1110011;
 
 // Funct3/Funct7
 const FUNCT3_ADD_SUB: u32 = 0b000;
-const FUNCT7_ADD: u32 = 0b0000000;
-const FUNCT7_SUB: u32 = 0b0100000;
 const FUNCT3_MUL: u32 = 0b000;
 const FUNCT3_DIV: u32 = 0b100;
+const FUNCT3_LW: u32 = 0b010;
+const FUNCT3_ADDI: u32 = 0b000;
+const FUNCT3_SW: u32 = 0b010;
+const FUNCT3_BEQ: u32 = 0b000;
+const FUNCT3_BLT: u32 = 0b100;
+const FUNCT3_BNE: u32 = 0b001;
+
 const FUNCT7_MULDIV: u32 = 0b0000001;
+const FUNCT7_ADD: u32 = 0b0000000;
+const FUNCT7_SUB: u32 = 0b0100000;
 
 // Custom HALT instruction
 pub const OP_HALT: u32 = 0x00000000;
@@ -193,26 +200,40 @@ pub fn parse_program(program: String) -> Vec<u8> {
             "addi" => encode_i_type(
                 operands[2].parse::<i32>().unwrap() as u32,
                 parse_register(operands[1]).unwrap(),
-                0b000,
+                FUNCT3_ADDI,
                 parse_register(operands[0]).unwrap(),
                 OP_IMM,
             ),
             "lw" => {
                 let rd = parse_register(operands[0]).unwrap();
                 let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                encode_i_type(offset as u32, base, 0b010, rd, OP_LOAD)
+                encode_i_type(offset as u32, base, FUNCT3_LW, rd, OP_LOAD)
             }
             "sw" => {
                 let rs2 = parse_register(operands[0]).unwrap();
                 let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                encode_s_type(offset as u32, rs2, base, 0b010, OP_STORE)
+                encode_s_type(offset as u32, rs2, base, FUNCT3_SW, OP_STORE)
             }
             "beq" => {
                 let rs1 = parse_register(operands[0]).unwrap();
                 let rs2 = parse_register(operands[1]).unwrap();
-                let target_address = *symbol_table.get(operands[2]).expect("Label not found");
+                let target_address = *symbol_table.get(operands[2]).expect("beq label not found");
                 let offset = (target_address as i64 - current_address as i64) as u32;
-                encode_sb_type(offset, rs2, rs1, 0b000, OP_BRANCH)
+                encode_sb_type(offset, rs2, rs1, FUNCT3_BEQ, OP_BRANCH)
+            }
+            "blt" => {
+                let rs1 = parse_register(operands[0]).unwrap();
+                let rs2 = parse_register(operands[1]).unwrap();
+                let target_address = *symbol_table.get(operands[2]).expect("blt label not found");
+                let offset = (target_address as i64 - current_address as i64) as u32;
+                encode_sb_type(offset, rs2, rs1, FUNCT3_BLT, OP_BRANCH)
+            }
+            "bne" => {
+                let rs1 = parse_register(operands[0]).unwrap();
+                let rs2 = parse_register(operands[1]).unwrap();
+                let target_address = *symbol_table.get(operands[2]).expect("bne label not found");
+                let offset = (target_address as i64 - current_address as i64) as u32;
+                encode_sb_type(offset, rs2, rs1, FUNCT3_BNE, OP_BRANCH)
             }
             "jal" => {
                 let rd = parse_register(operands[0]).unwrap();

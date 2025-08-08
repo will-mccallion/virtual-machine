@@ -12,14 +12,16 @@ const OP_JALR: u32 = 0b1100111;
 const OP_JAL: u32 = 0b1101111;
 const OP_SYSTEM: u32 = 0b1110011;
 
-// Funct3/Funct7/Funct12
-const FUNCT3_LW: u32 = 0b010;
-const FUNCT3_SW: u32 = 0b010;
-const FUNCT3_BEQ: u32 = 0b000;
+// Funct3/Funct7
 const FUNCT3_ADD_SUB: u32 = 0b000;
 const FUNCT3_MUL: u32 = 0b000;
 const FUNCT3_DIV: u32 = 0b100;
+const FUNCT3_LW: u32 = 0b010;
 const FUNCT3_ADDI: u32 = 0b000;
+const FUNCT3_SW: u32 = 0b010;
+const FUNCT3_BEQ: u32 = 0b000;
+const FUNCT3_BLT: u32 = 0b100;
+const FUNCT3_BNE: u32 = 0b001;
 
 const FUNCT7_MULDIV: u32 = 0b0000001;
 const FUNCT7_ADD: u32 = 0b0000000;
@@ -180,14 +182,27 @@ impl VM {
                     self.memory[addr..addr + 4].copy_from_slice(&data.to_le_bytes());
                 }
             }
-            OP_BRANCH => {
-                if funct3 == FUNCT3_BEQ {
+            OP_BRANCH => match funct3 {
+                FUNCT3_BEQ => {
                     let offset = self.decode_sb_imm(inst);
                     if self.registers[rs1] == self.registers[rs2] {
                         next_pc = self.pc.wrapping_add(offset as u64);
                     }
                 }
-            }
+                FUNCT3_BLT => {
+                    let offset = self.decode_sb_imm(inst);
+                    if self.registers[rs1] < self.registers[rs2] {
+                        next_pc = self.pc.wrapping_add(offset as u64);
+                    }
+                }
+                FUNCT3_BNE => {
+                    let offset = self.decode_sb_imm(inst);
+                    if self.registers[rs1] != self.registers[rs2] {
+                        next_pc = self.pc.wrapping_add(offset as u64);
+                    }
+                }
+                _ => {}
+            },
             OP_JAL => {
                 if rd > 0 {
                     self.registers[rd] = next_pc;
