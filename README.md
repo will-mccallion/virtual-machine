@@ -7,7 +7,7 @@ The Rusteze VM is a simple **64-bit** RISC-inspired virtual machine. It features
 -   **Architecture:** 64-bit (64-bit data path and registers).
 -   **Instruction Size:** Base instructions are fixed at 4 bytes (32 bits). Special instructions for loading large constants exist.
 -   **Endianness:** Little-endian.
--   **Memory:** 1024 bytes, byte-addressable.
+-   **Memory:** 10240 bytes, byte-addressable.
 -   **Registers:** 32 general-purpose **64-bit** registers.
 
 ## 2. Registers
@@ -41,15 +41,6 @@ The 1024-byte memory is a single contiguous block. The bootloader initializes th
 ## 4. Instruction Set
 
 Base instructions are 4 bytes. The first byte is the opcode, followed by three bytes for operands.
-
----
-
-### `halt` - Halt Execution
-
--   **Opcode:** `0x00`
--   **Syntax:** `halt`
--   **Description:** Stops the virtual machine.
--   **Encoding:** `[0x00, 0x00, 0x00, 0x00]`
 
 ---
 

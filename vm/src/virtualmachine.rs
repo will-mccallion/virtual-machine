@@ -1,7 +1,6 @@
 const MEMORY_SIZE: usize = 10240;
 
 // Opcodes for our 64-bit RISC-V-like instruction set
-pub const OP_HALT: u8 = 0x00;
 pub const OP_ADD: u8 = 0x01;
 pub const OP_SUB: u8 = 0x02;
 pub const OP_ADDI: u8 = 0x03;
@@ -71,12 +70,6 @@ impl VM {
         let instruction = self.memory[pc];
 
         match instruction {
-            OP_HALT => {
-                println!("HALT instruction encountered. VM is stopping.");
-                println!("! WARNING: 'halt' is depracted. Please use ret.");
-                Err(())
-            }
-
             OP_ADD | OP_SUB => {
                 let rd = self.memory[pc + 1] as usize;
                 let rs1 = self.memory[pc + 2] as usize;

@@ -7,4 +7,4 @@ start:
     beq t1, t2, done
     beq x0, x0, start
 done:
-    halt
+    ret
