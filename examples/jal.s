@@ -1,6 +1,6 @@
 main:
     jal ra, foo
-    ret
+    ecall
 
 foo:
     addi sp, sp, -8

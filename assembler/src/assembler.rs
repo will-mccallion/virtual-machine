@@ -3,20 +3,51 @@ use std::fs;
 use std::io;
 use std::process::exit;
 
-// Opcodes for our 64-bit RISC-V-like instruction set
-pub const OP_HALT: u8 = 0x00;
-pub const OP_ADD: u8 = 0x01;
-pub const OP_SUB: u8 = 0x02;
-pub const OP_ADDI: u8 = 0x03;
-pub const OP_BEQ: u8 = 0x04;
-pub const OP_JAL: u8 = 0x05;
-pub const OP_LW: u8 = 0x06;
-pub const OP_SW: u8 = 0x07;
-pub const OP_RET: u8 = 0x08;
-pub const OP_LDI: u8 = 0x09;
-pub const OP_MUL: u8 = 0x0a;
-pub const OP_DIV: u8 = 0x0b;
-pub const OP_ECALL: u8 = 0xFF;
+// --- RISC-V Instruction Constants ---
+// Opcodes
+const OP_LOAD: u32 = 0b0000011;
+const OP_IMM: u32 = 0b0010011;
+const OP_STORE: u32 = 0b0100011;
+const OP_REG: u32 = 0b0110011;
+const OP_BRANCH: u32 = 0b1100011;
+const OP_JALR: u32 = 0b1100111;
+const OP_JAL: u32 = 0b1101111;
+const OP_SYSTEM: u32 = 0b1110011;
+
+// Funct3/Funct7/Funct12
+const FUNCT3_LW: u32 = 0b010;
+const FUNCT3_SW: u32 = 0b010;
+const FUNCT3_BEQ: u32 = 0b000;
+const FUNCT3_ADD_SUB: u32 = 0b000;
+const FUNCT7_ADD: u32 = 0b0000000;
+const FUNCT7_SUB: u32 = 0b0100000;
+const FUNCT3_ADDI: u32 = 0b000;
+const FUNCT12_ECALL: u32 = 0x0;
+
+// --- CSR Addresses for Printing ---
+// Machine-Level
+const MSTATUS: usize = 0x300;
+const MISA: usize = 0x301;
+const MIE: usize = 0x304;
+const MTVEC: usize = 0x305;
+const MSCRATCH: usize = 0x340;
+const MEPC: usize = 0x341;
+const MCAUSE: usize = 0x342;
+const MTVAL: usize = 0x343;
+const MIP: usize = 0x344;
+// Supervisor-Level
+const SSTATUS: usize = 0x100;
+const SIE: usize = 0x104;
+const STVEC: usize = 0x105;
+const SSCRATCH: usize = 0x140;
+const SEPC: usize = 0x141;
+const SCAUSE: usize = 0x142;
+const STVAL: usize = 0x143;
+const SIP: usize = 0x144;
+const SATP: usize = 0x180;
+
+// Custom HALT instruction (encoded as an illegal instruction)
+pub const OP_HALT: u32 = 0x00000000;
 
 pub fn parse_command(program_args: &[String]) -> (String, String) {
     let mut input_file = String::new();
@@ -53,74 +84,93 @@ pub fn read_file(input_path: &str) -> io::Result<String> {
     fs::read_to_string(input_path)
 }
 
-fn parse_memory_operand(operand: &str) -> Result<(i8, u8), &'static str> {
+fn parse_register(reg_str: &str) -> Result<u32, &'static str> {
+    let cleaned_reg = reg_str.trim_end_matches(',');
+    match cleaned_reg {
+        "zero" | "x0" => Ok(0),
+        "ra" | "x1" => Ok(1),
+        "sp" | "x2" => Ok(2),
+        "gp" | "x3" => Ok(3),
+        "tp" | "x4" => Ok(4),
+        "t0" | "x5" => Ok(5),
+        "t1" | "x6" => Ok(6),
+        "t2" | "x7" => Ok(7),
+        "s0" | "fp" | "x8" => Ok(8),
+        "s1" | "x9" => Ok(9),
+        "a0" | "x10" => Ok(10),
+        "a1" | "x11" => Ok(11),
+        "a2" | "x12" => Ok(12),
+        "a3" | "x13" => Ok(13),
+        "a4" | "x14" => Ok(14),
+        "a5" | "x15" => Ok(15),
+        "a6" | "x16" => Ok(16),
+        "a7" | "x17" => Ok(17),
+        "s2" | "x18" => Ok(18),
+        "s3" | "x19" => Ok(19),
+        "s4" | "x20" => Ok(20),
+        "s5" | "x21" => Ok(21),
+        "s6" | "x22" => Ok(22),
+        "s7" | "x23" => Ok(23),
+        "s8" | "x24" => Ok(24),
+        "s9" | "x25" => Ok(25),
+        "s10" | "x26" => Ok(26),
+        "s11" | "x27" => Ok(27),
+        "t3" | "x28" => Ok(28),
+        "t4" | "x29" => Ok(29),
+        "t5" | "x30" => Ok(30),
+        "t6" | "x31" => Ok(31),
+        _ => Err("Invalid register name"),
+    }
+}
+
+fn parse_memory_operand(operand: &str) -> Result<(i32, u32), &'static str> {
     let open_paren = operand.find('(').ok_or("Missing '(' in memory operand")?;
     let close_paren = operand.find(')').ok_or("Missing ')' in memory operand")?;
     let offset_str = &operand[..open_paren];
     let offset = offset_str
-        .parse::<i8>()
+        .parse::<i32>()
         .map_err(|_| "Invalid memory offset")?;
     let base_reg_str = &operand[open_paren + 1..close_paren];
     let base_reg = parse_register(base_reg_str)?;
     Ok((offset, base_reg))
 }
 
-fn parse_register(reg_str: &str) -> Result<u8, &'static str> {
-    let cleaned_reg = reg_str.trim_end_matches(',');
-    match cleaned_reg {
-        "zero" => Ok(0),
-        "ra" => Ok(1),
-        "sp" => Ok(2),
-        "gp" => Ok(3),
-        "tp" => Ok(4),
+fn encode_r_type(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
+    (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+}
 
-        "t0" => Ok(5),
-        "t1" => Ok(6),
-        "t2" => Ok(7),
+fn encode_i_type(imm: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
+    (imm << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+}
 
-        "s0" => Ok(8),
-        "s1" => Ok(9),
+fn encode_s_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
+    let imm11_5 = (imm >> 5) & 0x7F;
+    let imm4_0 = imm & 0x1F;
+    (imm11_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm4_0 << 7) | opcode
+}
 
-        "a0" => Ok(10),
-        "a1" => Ok(11),
-        "a2" => Ok(12),
-        "a3" => Ok(13),
-        "a4" => Ok(14),
-        "a5" => Ok(15),
-        "a6" => Ok(16),
-        "a7" => Ok(17),
+fn encode_b_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
+    let imm12 = (imm >> 12) & 1;
+    let imm11 = (imm >> 11) & 1;
+    let imm10_5 = (imm >> 5) & 0x3f;
+    let imm4_1 = (imm >> 1) & 0xf;
+    let imm_hi = (imm12 << 6) | imm10_5;
+    let imm_lo = (imm4_1 << 1) | imm11;
+    (imm_hi << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm_lo << 7) | opcode
+}
 
-        "s2" => Ok(18),
-        "s3" => Ok(19),
-        "s4" => Ok(20),
-        "s5" => Ok(21),
-        "s6" => Ok(22),
-        "s7" => Ok(23),
-        "s8" => Ok(24),
-        "s9" => Ok(25),
-        "s10" => Ok(26),
-        "s11" => Ok(27),
-
-        "t3" => Ok(28),
-        "t4" => Ok(29),
-        "t5" => Ok(30),
-        "t6" => Ok(31),
-
-        _ => {
-            if cleaned_reg.starts_with('x') {
-                match cleaned_reg[1..].parse::<u8>() {
-                    Ok(num) if num < 32 => Ok(num),
-                    _ => Err("Invalid register number (must be x0-x31)"),
-                }
-            } else {
-                Err("Invalid register format")
-            }
-        }
-    }
+fn encode_j_type(imm: u32, rd: u32, opcode: u32) -> u32 {
+    let imm20 = (imm >> 20) & 1;
+    let imm10_1 = (imm >> 1) & 0x3ff;
+    let imm11 = (imm >> 11) & 1;
+    let imm19_12 = (imm >> 12) & 0xff;
+    let encoded_imm = (imm20 << 31) | (imm19_12 << 12) | (imm11 << 20) | (imm10_1 << 21);
+    encoded_imm | (rd << 7) | opcode
 }
 
 pub fn parse_program(program: String) -> Vec<u8> {
     let mut symbol_table: HashMap<String, u64> = HashMap::new();
+    let mut instructions = Vec::new();
     let mut current_address: u64 = 0;
 
     for line in program.lines() {
@@ -128,104 +178,84 @@ pub fn parse_program(program: String) -> Vec<u8> {
         if line.is_empty() {
             continue;
         }
+
         if line.ends_with(':') {
             let label = line.trim_end_matches(':').to_string();
             symbol_table.insert(label, current_address);
         } else {
-            let tokens: Vec<&str> = line.split_whitespace().collect();
-            let instruction = tokens[0].to_lowercase();
-            current_address += if instruction == "li" { 12 } else { 4 };
+            instructions.push(line.to_string());
+            current_address += 4;
         }
     }
 
     let mut bin: Vec<u8> = Vec::new();
     current_address = 0;
-    for line in program.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() || line.ends_with(':') {
-            continue;
-        }
 
+    for line in instructions {
         let tokens: Vec<&str> = line.split_whitespace().collect();
         let instruction = tokens[0].to_lowercase();
         let operands = &tokens[1..];
 
-        match instruction.as_str() {
-            "add" | "sub" | "mul" | "div" => {
-                match instruction.as_str() {
-                    "add" => bin.push(OP_ADD),
-                    "sub" => bin.push(OP_SUB),
-                    "mul" => bin.push(OP_MUL),
-                    "div" => bin.push(OP_DIV),
-                    _ => {}
-                }
-                bin.extend_from_slice(&[
-                    parse_register(operands[0]).unwrap(),
-                    parse_register(operands[1]).unwrap(),
-                    parse_register(operands[2]).unwrap(),
-                ]);
-            }
-            "addi" => {
-                bin.push(OP_ADDI);
-                let immediate = operands[2].parse::<i8>().unwrap();
-                bin.extend_from_slice(&[
-                    parse_register(operands[0]).unwrap(),
-                    parse_register(operands[1]).unwrap(),
-                    immediate as u8,
-                ]);
-            }
-            "li" => {
-                bin.push(OP_LDI);
+        let encoded_inst = match instruction.as_str() {
+            "add" => encode_r_type(
+                0b0000000,
+                parse_register(operands[2]).unwrap(),
+                parse_register(operands[1]).unwrap(),
+                0b000,
+                parse_register(operands[0]).unwrap(),
+                OP_REG,
+            ),
+            "addi" => encode_i_type(
+                operands[2].parse::<i32>().unwrap() as u32,
+                parse_register(operands[1]).unwrap(),
+                0b000,
+                parse_register(operands[0]).unwrap(),
+                OP_IMM,
+            ),
+            "lw" => {
                 let rd = parse_register(operands[0]).unwrap();
-                let immediate = operands[1].parse::<u64>().unwrap();
-                bin.push(rd);
-                bin.extend_from_slice(&[0, 0]);
-                bin.extend_from_slice(&immediate.to_le_bytes());
+                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
+                encode_i_type(offset as u32, base, 0b010, rd, OP_LOAD)
+            }
+            "sw" => {
+                let rs2 = parse_register(operands[0]).unwrap();
+                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
+                encode_s_type(offset as u32, rs2, base, 0b010, OP_STORE)
             }
             "beq" => {
-                bin.push(OP_BEQ);
+                let rs1 = parse_register(operands[0]).unwrap();
+                let rs2 = parse_register(operands[1]).unwrap();
                 let target_address = *symbol_table.get(operands[2]).expect("Label not found");
-                let offset = target_address as i64 - current_address as i64;
-                if offset > 127 || offset < -128 {
-                    panic!("beq offset too large");
-                }
-                bin.extend_from_slice(&[
-                    parse_register(operands[0]).unwrap(),
-                    parse_register(operands[1]).unwrap(),
-                    offset as u8,
-                ]);
+                let offset = (target_address as i64 - current_address as i64) as u32;
+                encode_b_type(offset, rs2, rs1, 0b000, OP_BRANCH)
             }
             "jal" => {
-                bin.push(OP_JAL);
-                let target_address = *symbol_table.get(operands[1]).expect("Label not found");
-                let offset = target_address as i64 - current_address as i64;
-                if offset > 32767 || offset < -32768 {
-                    panic!("jal offset too large");
-                }
-                bin.push(parse_register(operands[0]).unwrap());
-                bin.extend_from_slice(&(offset as i16).to_le_bytes());
+                let rd = parse_register(operands[0]).unwrap();
+                let target_label = operands.get(1).unwrap_or(&"");
+                let target_address = *symbol_table
+                    .get(*target_label)
+                    .expect("JAL label not found");
+                let offset = (target_address as i64 - current_address as i64) as u32;
+                encode_j_type(offset, rd, OP_JAL)
             }
-            "sw" | "lw" => {
-                bin.push(if instruction == "sw" { OP_SW } else { OP_LW });
-                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                bin.extend_from_slice(&[parse_register(operands[0]).unwrap(), base, offset as u8]);
-            }
-            "ret" => {
-                bin.push(OP_RET);
-                bin.extend_from_slice(&[0, 0, 0]);
-            }
-            "ecall" => {
-                bin.extend_from_slice(&[OP_ECALL, 0, 0, 0]);
-            }
-            "halt" => {
-                bin.extend_from_slice(&[OP_HALT, 0, 0, 0]);
-            }
+            "jalr" => encode_i_type(
+                0,
+                parse_register(operands[1]).unwrap(),
+                0b000,
+                parse_register(operands[0]).unwrap(),
+                OP_JALR,
+            ),
+            "ret" => encode_i_type(0, 1, 0b000, 0, OP_JALR),
+            "ecall" => encode_r_type(0, 0, 0, 0, 0, OP_SYSTEM),
+            "halt" => OP_HALT,
             _ => {
                 eprintln!("Unknown instruction: {}", instruction);
                 exit(2);
             }
-        }
-        current_address += if instruction == "li" { 12 } else { 4 };
+        };
+
+        bin.extend_from_slice(&encoded_inst.to_le_bytes());
+        current_address += 4;
     }
     bin
 }

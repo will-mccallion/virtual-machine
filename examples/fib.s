@@ -1,14 +1,14 @@
 main:
-    li a0, 8
+    addi a0, zero, 8
     jal ra, fib
-    ret
+    ecall
 
 fib:
-    addi sp, sp, -24
+    addi sp, sp, -12
 
     sw s0, 0(sp)
-    sw s1, 8(sp)
-    sw ra, 16(sp)
+    sw s1, 4(sp)
+    sw ra, 8(sp)
 
     addi t0, zero, 1
     beq a0, t0, end_fib
@@ -29,8 +29,8 @@ fib:
 
 end_fib:
     lw s0, 0(sp)
-    lw s1, 8(sp)
-    lw ra, 16(sp)
+    lw s1, 4(sp)
+    lw ra, 8(sp)
 
-    addi sp, sp, 24
+    addi sp, sp, 12
     ret
