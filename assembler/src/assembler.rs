@@ -1,90 +1,212 @@
 use std::collections::HashMap;
-use std::fs;
-use std::io;
-use std::process::exit;
+use std::error::Error;
+use std::fmt;
 
-// --- RISC-V Instruction Constants ---
-const OP_LOAD: u32 = 0b0000011;
-const OP_IMM: u32 = 0b0010011;
-const OP_STORE: u32 = 0b0100011;
-const OP_REG: u32 = 0b0110011;
-const OP_BRANCH: u32 = 0b1100011;
-const OP_JALR: u32 = 0b1100111;
-const OP_JAL: u32 = 0b1101111;
-const OP_SYSTEM: u32 = 0b1110011;
+use riscv_core::{funct3, funct7, opcodes};
 
-// Funct3/Funct7
-const FUNCT3_ADD_SUB: u32 = 0b000;
-const FUNCT3_MUL: u32 = 0b000;
-const FUNCT3_DIV: u32 = 0b100;
-const FUNCT3_LW: u32 = 0b010;
-const FUNCT3_ADDI: u32 = 0b000;
-const FUNCT3_AND: u32 = 0b111;
-const FUNCT3_SW: u32 = 0b010;
-const FUNCT3_BEQ: u32 = 0b000;
-const FUNCT3_BLT: u32 = 0b100;
-const FUNCT3_BNE: u32 = 0b001;
-const FUNCT3_LD: u32 = 0b011;
-const FUNCT3_SD: u32 = 0b011;
-const FUNCT3_LB: u32 = 0b000;
-const FUNCT3_SB: u32 = 0b000;
-const FUNCT3_OR: u32 = 0b110;
-const FUNCT3_SLT: u32 = 0b010;
-const FUNCT3_SRA: u32 = 0b101;
-const FUNCT3_SRL: u32 = 0b101;
-const FUNCT3_XOR: u32 = 0b100;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AssemblerError {
+    InvalidRegister(String),
+    InvalidMemoryOperand(String),
+    InvalidImmediateValue(String),
+    UndefinedLabel(String),
+    UnknownInstruction(String),
+}
 
-const FUNCT7_MULDIV: u32 = 0b0000001;
-const FUNCT7_ADD: u32 = 0b0000000;
-const FUNCT7_SUB: u32 = 0b0100000;
-const FUNCT7_AND: u32 = 0b0000000;
-const FUNCT7_OR: u32 = 0b0000000;
-const FUNCT7_SLT: u32 = 0b0000000;
-const FUNCT7_SRA: u32 = 0b0100000;
-const FUNCT7_SRL: u32 = 0b0000000;
-const FUNCT7_XOR: u32 = 0b0000000;
-
-// Custom HALT instruction
-pub const OP_HALT: u32 = 0x00000000;
-
-pub fn parse_command(program_args: &[String]) -> (String, String) {
-    let mut input_file = String::new();
-    let mut output_file = String::new();
-    let mut i = 0;
-    while i < program_args.len() {
-        match program_args[i].as_str() {
-            "-o" => {
-                i += 1;
-                if i < program_args.len() {
-                    output_file = program_args[i].clone();
-                } else {
-                    eprintln!("Error: -o flag requires an output file path.");
-                    exit(1);
-                }
+impl fmt::Display for AssemblerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::InvalidRegister(reg) => write!(f, "Invalid register name: '{}'", reg),
+            Self::InvalidMemoryOperand(op) => write!(f, "Invalid memory operand format: '{}'", op),
+            Self::InvalidImmediateValue(val) => {
+                write!(f, "Cannot parse immediate value: '{}'", val)
             }
-            arg if !arg.starts_with('-') => input_file = arg.to_string(),
-            _ => { /* Ignore unknown flags */ }
+            Self::UndefinedLabel(label) => write!(f, "Use of undefined label: '{}'", label),
+            Self::UnknownInstruction(inst) => write!(f, "Unknown instruction: '{}'", inst),
         }
-        i += 1;
     }
-    if input_file.is_empty() {
-        eprintln!("Error: No input file provided.");
-        exit(1);
-    }
-    if output_file.is_empty() {
-        eprintln!("Error: No output file provided. Use the -o flag.");
-        exit(1);
-    }
-    (input_file, output_file)
 }
 
-pub fn read_file(input_path: &str) -> io::Result<String> {
-    fs::read_to_string(input_path)
+impl Error for AssemblerError {}
+
+pub fn parse_program(program: &str) -> Result<Vec<u8>, AssemblerError> {
+    let mut symbol_table = HashMap::new();
+    let mut address_counter: u64 = 0;
+    let mut instruction_lines = Vec::new();
+
+    for line in program.lines() {
+        let clean_line = line.split('#').next().unwrap_or("").trim();
+        if clean_line.is_empty() {
+            continue;
+        }
+
+        if let Some(label) = clean_line.strip_suffix(':') {
+            symbol_table.insert(label.to_string(), address_counter);
+        } else {
+            instruction_lines.push(clean_line);
+            address_counter += 4;
+        }
+    }
+
+    let mut bin = Vec::new();
+    let mut current_address: u64 = 0;
+
+    for line in instruction_lines {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let instruction = tokens[0].to_lowercase();
+        let operands = &tokens[1..];
+
+        let encoded_inst =
+            encode_instruction(&instruction, operands, current_address, &symbol_table)?;
+        bin.extend_from_slice(&encoded_inst.to_le_bytes());
+        current_address += 4;
+    }
+
+    Ok(bin)
 }
 
-fn parse_register(reg_str: &str) -> Result<u32, &'static str> {
-    let cleaned_reg = reg_str.trim_end_matches(',');
-    match cleaned_reg {
+fn encode_instruction(
+    instruction: &str,
+    operands: &[&str],
+    current_address: u64,
+    symbol_table: &HashMap<String, u64>,
+) -> Result<u32, AssemblerError> {
+    match instruction {
+        // R-type
+        "add" | "sub" | "mul" | "div" | "and" | "or" | "slt" | "sra" | "srl" | "xor" => {
+            let rd = parse_register(operands[0])?;
+            let rs1 = parse_register(operands[1])?;
+            let rs2 = parse_register(operands[2])?;
+            let (funct7, funct3) = match instruction {
+                "add" => (funct7::ADD, funct3::ADD_SUB),
+                "sub" => (funct7::SUB, funct3::ADD_SUB),
+                "mul" => (funct7::MULDIV, funct3::MUL),
+                "div" => (funct7::MULDIV, funct3::DIV),
+                "and" => (funct7::DEFAULT, funct3::AND),
+                "or" => (funct7::DEFAULT, funct3::OR),
+                "slt" => (funct7::DEFAULT, funct3::SLT),
+                "sra" => (funct7::SRA, funct3::SRA),
+                "srl" => (funct7::DEFAULT, funct3::SRL),
+                "xor" => (funct7::DEFAULT, funct3::XOR),
+                _ => unreachable!(),
+            };
+            Ok(encode_r_type(funct7, rs2, rs1, funct3, rd, opcodes::OP_REG))
+        }
+        // I-type
+        "addi" | "lw" | "ld" | "lb" | "lbu" | "jalr" => {
+            let rd = parse_register(operands[0])?;
+            let (rs1, imm, funct3, opcode) = match instruction {
+                "addi" => {
+                    let rs1 = parse_register(operands[1])?;
+                    let imm = operands[2].parse::<i32>().map_err(|_| {
+                        AssemblerError::InvalidImmediateValue(operands[2].to_string())
+                    })?;
+                    (rs1, imm as u32, funct3::ADDI, opcodes::OP_IMM)
+                }
+                "lw" | "ld" | "lb" | "lbu" => {
+                    let (offset, base) = parse_memory_operand(operands[1])?;
+                    let funct3 = match instruction {
+                        "lw" => funct3::LW,
+                        "ld" => funct3::LD,
+                        "lb" => funct3::LB,
+                        "lbu" => funct3::LBU,
+                        _ => unreachable!(),
+                    };
+                    (base, offset as u32, funct3, opcodes::OP_LOAD)
+                }
+                "jalr" => (
+                    parse_register(operands[1])?,
+                    0,
+                    funct3::ADD_SUB,
+                    opcodes::OP_JALR,
+                ),
+                _ => unreachable!(),
+            };
+            Ok(encode_i_type(imm, rs1, funct3, rd, opcode))
+        }
+        "ret" => Ok(encode_i_type(0, 1, funct3::ADD_SUB, 0, opcodes::OP_JALR)),
+        // S-type
+        "sw" | "sd" | "sb" => {
+            let rs2 = parse_register(operands[0])?;
+            let (offset, base) = parse_memory_operand(operands[1])?;
+            let funct3 = match instruction {
+                "sw" => funct3::SW,
+                "sd" => funct3::SD,
+                "sb" => funct3::SB,
+                _ => unreachable!(),
+            };
+            Ok(encode_s_type(
+                offset as u32,
+                rs2,
+                base,
+                funct3,
+                opcodes::OP_STORE,
+            ))
+        }
+        // SB-type
+        "beq" | "blt" | "bne" => {
+            let rs1 = parse_register(operands[0])?;
+            let rs2 = parse_register(operands[1])?;
+            let target_address = symbol_table
+                .get(operands[2])
+                .ok_or_else(|| AssemblerError::UndefinedLabel(operands[2].to_string()))?;
+            let offset = (*target_address as i64 - current_address as i64) as u32;
+            let funct3 = match instruction {
+                "beq" => funct3::BEQ,
+                "blt" => funct3::BLT,
+                "bne" => funct3::BNE,
+                _ => unreachable!(),
+            };
+            Ok(encode_sb_type(offset, rs2, rs1, funct3, opcodes::OP_BRANCH))
+        }
+        // UJ-type
+        "jal" => {
+            let rd = parse_register(operands[0])?;
+            let target_label = operands[1];
+            let target_address = symbol_table
+                .get(target_label)
+                .ok_or_else(|| AssemblerError::UndefinedLabel(target_label.to_string()))?;
+            let offset = (*target_address as i64 - current_address as i64) as u32;
+            Ok(encode_uj_type(offset, rd, opcodes::OP_JAL))
+        }
+        // System and pseudo-instructions
+        "ecall" => Ok(encode_r_type(0, 0, 0, 0, 0, opcodes::OP_SYSTEM)),
+        "halt" => Ok(opcodes::OP_HALT),
+        _ => Err(AssemblerError::UnknownInstruction(instruction.to_string())),
+    }
+}
+
+fn encode_r_type(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
+    (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+}
+fn encode_i_type(imm: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
+    (imm << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
+}
+fn encode_s_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
+    let imm11_5 = (imm >> 5) & 0x7F;
+    let imm4_0 = imm & 0x1F;
+    (imm11_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm4_0 << 7) | opcode
+}
+fn encode_sb_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
+    let imm12 = (imm >> 12) & 1;
+    let imm11 = (imm >> 11) & 1;
+    let imm10_5 = (imm >> 5) & 0x3f;
+    let imm4_1 = (imm >> 1) & 0xf;
+    let imm_hi = (imm12 << 6) | imm10_5;
+    let imm_lo = (imm4_1 << 1) | imm11;
+    (imm_hi << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm_lo << 7) | opcode
+}
+fn encode_uj_type(imm: u32, rd: u32, opcode: u32) -> u32 {
+    let imm20 = (imm >> 20) & 1;
+    let imm10_1 = (imm >> 1) & 0x3ff;
+    let imm11 = (imm >> 11) & 1;
+    let imm19_12 = (imm >> 12) & 0xff;
+    let encoded_imm = (imm20 << 31) | (imm19_12 << 12) | (imm11 << 20) | (imm10_1 << 21);
+    encoded_imm | (rd << 7) | opcode
+}
+
+fn parse_register(reg_str: &str) -> Result<u32, AssemblerError> {
+    match reg_str.trim_end_matches(',') {
         "zero" | "x0" => Ok(0),
         "ra" | "x1" => Ok(1),
         "sp" | "x2" => Ok(2),
@@ -117,209 +239,22 @@ fn parse_register(reg_str: &str) -> Result<u32, &'static str> {
         "t4" | "x29" => Ok(29),
         "t5" | "x30" => Ok(30),
         "t6" | "x31" => Ok(31),
-        _ => Err("Invalid register name"),
+        _ => Err(AssemblerError::InvalidRegister(reg_str.to_string())),
     }
 }
 
-fn parse_memory_operand(operand: &str) -> Result<(i32, u32), &'static str> {
-    let open_paren = operand.find('(').ok_or("Missing '(' in memory operand")?;
-    let close_paren = operand.find(')').ok_or("Missing ')' in memory operand")?;
+fn parse_memory_operand(operand: &str) -> Result<(i32, u32), AssemblerError> {
+    let open_paren = operand
+        .find('(')
+        .ok_or_else(|| AssemblerError::InvalidMemoryOperand(operand.to_string()))?;
+    let close_paren = operand
+        .find(')')
+        .ok_or_else(|| AssemblerError::InvalidMemoryOperand(operand.to_string()))?;
     let offset_str = &operand[..open_paren];
     let offset = offset_str
         .parse::<i32>()
-        .map_err(|_| "Invalid memory offset")?;
+        .map_err(|_| AssemblerError::InvalidImmediateValue(offset_str.to_string()))?;
     let base_reg_str = &operand[open_paren + 1..close_paren];
     let base_reg = parse_register(base_reg_str)?;
     Ok((offset, base_reg))
-}
-
-// --- Encoder Functions ---
-fn encode_r_type(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
-    (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
-}
-
-fn encode_i_type(imm: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
-    (imm << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
-}
-
-fn encode_s_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
-    let imm11_5 = (imm >> 5) & 0x7F;
-    let imm4_0 = imm & 0x1F;
-    (imm11_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm4_0 << 7) | opcode
-}
-
-fn encode_sb_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
-    let imm12 = (imm >> 12) & 1;
-    let imm11 = (imm >> 11) & 1;
-    let imm10_5 = (imm >> 5) & 0x3f;
-    let imm4_1 = (imm >> 1) & 0xf;
-    let imm_hi = (imm12 << 6) | imm10_5;
-    let imm_lo = (imm4_1 << 1) | imm11;
-    (imm_hi << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm_lo << 7) | opcode
-}
-
-fn encode_u_type(imm: u32, rd: u32, opcode: u32) -> u32 {
-    (imm << 12) | (rd << 7) | opcode
-}
-
-fn encode_uj_type(imm: u32, rd: u32, opcode: u32) -> u32 {
-    let imm20 = (imm >> 20) & 1;
-    let imm10_1 = (imm >> 1) & 0x3ff;
-    let imm11 = (imm >> 11) & 1;
-    let imm19_12 = (imm >> 12) & 0xff;
-    let encoded_imm = (imm20 << 31) | (imm19_12 << 12) | (imm11 << 20) | (imm10_1 << 21);
-    encoded_imm | (rd << 7) | opcode
-}
-
-pub fn parse_program(program: String) -> Vec<u8> {
-    let mut symbol_table: HashMap<String, u64> = HashMap::new();
-    let mut instructions = Vec::new();
-    let mut current_address: u64 = 0;
-
-    for line in program.lines() {
-        let line = line.split('#').next().unwrap_or("").trim();
-        if line.is_empty() {
-            continue;
-        }
-
-        if line.ends_with(':') {
-            let label = line.trim_end_matches(':').to_string();
-            symbol_table.insert(label, current_address);
-        } else {
-            instructions.push(line.to_string());
-            current_address += 4;
-        }
-    }
-
-    let mut bin: Vec<u8> = Vec::new();
-    current_address = 0;
-
-    for line in instructions {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
-        let instruction = tokens[0].to_lowercase();
-        let operands = &tokens[1..];
-
-        let encoded_inst = match instruction.as_str() {
-            // R-type Instructions (register-register)
-            "add" | "sub" | "mul" | "div" | "and" | "or" | "slt" | "sra" | "srl" | "xor" => {
-                let rd = parse_register(operands[0]).unwrap();
-                let rs1 = parse_register(operands[1]).unwrap();
-                let rs2 = parse_register(operands[2]).unwrap();
-                let (funct7, funct3) = match instruction.as_str() {
-                    "add" => (FUNCT7_ADD, FUNCT3_ADD_SUB),
-                    "sub" => (FUNCT7_SUB, FUNCT3_ADD_SUB),
-                    "mul" => (FUNCT7_MULDIV, FUNCT3_MUL),
-                    "div" => (FUNCT7_MULDIV, FUNCT3_DIV),
-                    "and" => (FUNCT7_AND, FUNCT3_AND),
-                    "or" => (FUNCT7_OR, FUNCT3_OR),
-                    "slt" => (FUNCT7_SLT, FUNCT3_SLT),
-                    "sra" => (FUNCT7_SRA, FUNCT3_SRA),
-                    "srl" => (FUNCT7_SRL, FUNCT3_SRL),
-                    "xor" => (FUNCT7_XOR, FUNCT3_XOR),
-                    _ => unreachable!(),
-                };
-                encode_r_type(funct7, rs2, rs1, funct3, rd, OP_REG)
-            }
-
-            // I-Type instructions
-            "addi" | "lw" | "ld" | "lb" | "jalr" | "ret" => {
-                if instruction == "ret" {
-                    encode_i_type(0, 1, 0b000, 0, OP_JALR)
-                } else {
-                    let rd = parse_register(operands[0]).unwrap();
-                    let rs1;
-                    let imm;
-                    let funct3;
-                    let opcode;
-
-                    match instruction.as_str() {
-                        "addi" => {
-                            rs1 = parse_register(operands[1]).unwrap();
-                            imm = operands[2].parse::<i32>().unwrap() as u32;
-                            funct3 = FUNCT3_ADDI;
-                            opcode = OP_IMM;
-                        }
-                        "lw" | "ld" | "lb" => {
-                            let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                            rs1 = base;
-                            imm = offset as u32;
-                            opcode = OP_LOAD;
-                            funct3 = match instruction.as_str() {
-                                "lw" => FUNCT3_LW,
-                                "ld" => FUNCT3_LD,
-                                "lb" => FUNCT3_LB,
-                                _ => unreachable!(),
-                            };
-                        }
-                        "jalr" => {
-                            rs1 = parse_register(operands[1]).unwrap();
-                            imm = 0;
-                            funct3 = 0b000;
-                            opcode = OP_JALR;
-                        }
-                        _ => unreachable!(),
-                    };
-
-                    encode_i_type(imm, rs1, funct3, rd, opcode)
-                }
-            }
-
-            // S-type Instructions
-            "sw" | "sd" | "sb" => {
-                let rs2 = parse_register(operands[0]).unwrap();
-                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                let funct3 = match instruction.as_str() {
-                    "sw" => FUNCT3_SW,
-                    "sd" => FUNCT3_SD,
-                    "sb" => FUNCT3_SB,
-                    _ => unreachable!(),
-                };
-                encode_s_type(offset as u32, rs2, base, funct3, OP_STORE)
-            }
-
-            // SB-type Instructions
-            "beq" | "blt" | "bne" => {
-                let rs1 = parse_register(operands[0]).unwrap();
-                let rs2 = parse_register(operands[1]).unwrap();
-                let target_address = *symbol_table
-                    .get(operands[2])
-                    .expect("branch label not found");
-                let offset = (target_address as i64 - current_address as i64) as u32;
-                let funct3 = match instruction.as_str() {
-                    "beq" => FUNCT3_BEQ,
-                    "blt" => FUNCT3_BLT,
-                    "bne" => FUNCT3_BNE,
-                    _ => unreachable!(),
-                };
-                encode_sb_type(offset, rs2, rs1, funct3, OP_BRANCH)
-            }
-
-            // UJ-type Instructions
-            "jal" => {
-                let rd = parse_register(operands[0]).unwrap();
-                let target_label = operands.get(1).unwrap_or(&"");
-                let target_address = *symbol_table
-                    .get(*target_label)
-                    .expect("JAL label not found");
-                let offset = (target_address as i64 - current_address as i64) as u32;
-                encode_uj_type(offset, rd, OP_JAL)
-            }
-
-            "ecall" => encode_r_type(0, 0, 0, 0, 0, OP_SYSTEM),
-            "halt" => OP_HALT,
-
-            _ => {
-                eprintln!("Unknown instruction: {}", instruction);
-                exit(2);
-            }
-        };
-
-        bin.extend_from_slice(&encoded_inst.to_le_bytes());
-        current_address += 4;
-    }
-    bin
-}
-
-pub fn save_assembly(output_path: &str, data: &[u8]) -> io::Result<()> {
-    fs::write(output_path, data)
 }

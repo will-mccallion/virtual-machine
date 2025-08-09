@@ -5,3 +5,6 @@ version = 4
 [[package]]
 name = "vm"
 version = "0.1.0"
+
+[dependencies]
+riscv_core = { path = "../riscv_core/" }

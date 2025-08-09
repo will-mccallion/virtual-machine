@@ -3,7 +3,7 @@
 members = [
     "vm",
     "assembler",
-    "os",
+    "os", "riscv_core",
 ]
 
 resolver = "3"
