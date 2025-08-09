@@ -19,6 +19,7 @@ const FUNCT3_MUL: u32 = 0b000;
 const FUNCT3_DIV: u32 = 0b100;
 const FUNCT3_LW: u32 = 0b010;
 const FUNCT3_ADDI: u32 = 0b000;
+const FUNCT3_AND: u32 = 0b111;
 const FUNCT3_SW: u32 = 0b010;
 const FUNCT3_BEQ: u32 = 0b000;
 const FUNCT3_BLT: u32 = 0b100;
@@ -27,10 +28,21 @@ const FUNCT3_LD: u32 = 0b011;
 const FUNCT3_SD: u32 = 0b011;
 const FUNCT3_LB: u32 = 0b000;
 const FUNCT3_SB: u32 = 0b000;
+const FUNCT3_OR: u32 = 0b110;
+const FUNCT3_SLT: u32 = 0b010;
+const FUNCT3_SRA: u32 = 0b101;
+const FUNCT3_SRL: u32 = 0b101;
+const FUNCT3_XOR: u32 = 0b100;
 
 const FUNCT7_MULDIV: u32 = 0b0000001;
 const FUNCT7_ADD: u32 = 0b0000000;
 const FUNCT7_SUB: u32 = 0b0100000;
+const FUNCT7_AND: u32 = 0b0000000;
+const FUNCT7_OR: u32 = 0b0000000;
+const FUNCT7_SLT: u32 = 0b0000000;
+const FUNCT7_SRA: u32 = 0b0100000;
+const FUNCT7_SRL: u32 = 0b0000000;
+const FUNCT7_XOR: u32 = 0b0000000;
 
 // Custom HALT instruction
 pub const OP_HALT: u32 = 0x00000000;
@@ -189,7 +201,7 @@ pub fn parse_program(program: String) -> Vec<u8> {
 
         let encoded_inst = match instruction.as_str() {
             // R-type Instructions (register-register)
-            "add" | "sub" | "mul" | "div" => {
+            "add" | "sub" | "mul" | "div" | "and" | "or" | "slt" | "sra" | "srl" | "xor" => {
                 let rd = parse_register(operands[0]).unwrap();
                 let rs1 = parse_register(operands[1]).unwrap();
                 let rs2 = parse_register(operands[2]).unwrap();
@@ -198,6 +210,12 @@ pub fn parse_program(program: String) -> Vec<u8> {
                     "sub" => (FUNCT7_SUB, FUNCT3_ADD_SUB),
                     "mul" => (FUNCT7_MULDIV, FUNCT3_MUL),
                     "div" => (FUNCT7_MULDIV, FUNCT3_DIV),
+                    "and" => (FUNCT7_AND, FUNCT3_AND),
+                    "or" => (FUNCT7_OR, FUNCT3_OR),
+                    "slt" => (FUNCT7_SLT, FUNCT3_SLT),
+                    "sra" => (FUNCT7_SRA, FUNCT3_SRA),
+                    "srl" => (FUNCT7_SRL, FUNCT3_SRL),
+                    "xor" => (FUNCT7_XOR, FUNCT3_XOR),
                     _ => unreachable!(),
                 };
                 encode_r_type(funct7, rs2, rs1, funct3, rd, OP_REG)

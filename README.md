@@ -59,7 +59,13 @@ The VM uses the standard 32-bit RISC-V instruction formats. Unlike a simpler des
 | `add`    | Adds the values in two source registers.                                  | R-Type       |
 | `sub`    | Subtracts the values in two source registers.                             | R-Type       |
 | `mul`    | Multiplies the values in two source registers.                            | R-Type       |
-| `div`    | Divides the value in `rs1` by `rs2`.                                      | R-Type       |
+| `div`    | Divides the value in two source registers                                 | R-Type       |
+| `and`    | Performs a bitwise and on the two source registers.                       | R-Type       |
+| `or`     | Performs a bitwise or on the two source registers.                        | R-Type       |
+| `xor`    | Performs a bitwise xor on the two source registers.                       | R-Type       |
+| `sll`    | Shifts `rs1` left `rs2` bits.                                             | R-Type       |
+| `sra`    | Shifts `rs1` right `rs2` bits and sign-extends it to 64 bits.             | R-Type       |
+| `srl`    | Shifts `rs1` right `rs2` bits.                                            | R-Type       |
 | `addi`   | Adds a 12-bit sign-extended immediate to a register.                      | I-Type       |
 | `ld`     | Loads a 64-bit word from memory.                                          | I-Type       |
 | `lw`     | Loads a 32-bit word from memory and sign-extends it to 64 bits.           | I-Type       |
@@ -91,9 +97,9 @@ To allow functions to call each other without interfering, the standard RISC-V c
 
 ### Function Prologue (At the start of a function)
 
-1.  **Allocate Stack Frame:** Make space on the stack for any data you need to save by decrementing the stack pointer (`addi sp, sp, -size`). The size should be a multiple of **4** to maintain stack alignment for word-sized data.
+1.  **Allocate Stack Frame:** Make space on the stack for any data you need to save by decrementing the stack pointer (`addi sp, sp, -size`). The size should be a multiple of **8** to maintain stack alignment for word-sized data.
 2.  **Save Return Address:** If the function calls another function (is not a "leaf" function), it MUST save the `ra` register to the stack (e.g., `sw ra, 8(sp)`).
-3.  **Save Callee-Saved Registers:** If the function intends to modify any `s` registers (`s0-s11`), it must first save their original values to the stack (e.g., `sw s0, 4(sp)`).
+3.  **Save Callee-Saved Registers:** If the function intends to modify any `s` registers (`s0-s11`), it must first save their original values to the stack (e.g., `sw s0, 16(sp)`).
 
 ### Function Epilogue (At the end of a function)
 

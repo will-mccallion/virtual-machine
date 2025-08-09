@@ -18,18 +18,30 @@ const FUNCT3_MUL: u32 = 0b000;
 const FUNCT3_DIV: u32 = 0b100;
 const FUNCT3_LW: u32 = 0b010;
 const FUNCT3_ADDI: u32 = 0b000;
+const FUNCT3_AND: u32 = 0b111;
 const FUNCT3_SW: u32 = 0b010;
 const FUNCT3_BEQ: u32 = 0b000;
 const FUNCT3_BLT: u32 = 0b100;
 const FUNCT3_BNE: u32 = 0b001;
-const FUNCT3_SD: u32 = 0b011;
 const FUNCT3_LD: u32 = 0b011;
+const FUNCT3_SD: u32 = 0b011;
 const FUNCT3_LB: u32 = 0b000;
 const FUNCT3_SB: u32 = 0b000;
+const FUNCT3_OR: u32 = 0b110;
+const FUNCT3_SLT: u32 = 0b010;
+const FUNCT3_SRA: u32 = 0b101;
+const FUNCT3_SRL: u32 = 0b101;
+const FUNCT3_XOR: u32 = 0b100;
 
 const FUNCT7_MULDIV: u32 = 0b0000001;
 const FUNCT7_ADD: u32 = 0b0000000;
 const FUNCT7_SUB: u32 = 0b0100000;
+const FUNCT7_AND: u32 = 0b0000000;
+const FUNCT7_OR: u32 = 0b0000000;
+const FUNCT7_SLT: u32 = 0b0000000;
+const FUNCT7_SRA: u32 = 0b0100000;
+const FUNCT7_SRL: u32 = 0b0000000;
+const FUNCT7_XOR: u32 = 0b0000000;
 
 const FUNCT12_ECALL: u32 = 0x0;
 
@@ -152,16 +164,32 @@ impl VM {
                         (FUNCT3_ADD_SUB, FUNCT7_ADD) => {
                             self.registers[rd] = val1.wrapping_add(val2)
                         }
+
                         (FUNCT3_ADD_SUB, FUNCT7_SUB) => {
                             self.registers[rd] = val1.wrapping_sub(val2)
                         }
+
                         (FUNCT3_MUL, FUNCT7_MULDIV) => self.registers[rd] = val1.wrapping_mul(val2),
                         (FUNCT3_DIV, FUNCT7_MULDIV) => self.registers[rd] = val1.wrapping_div(val2),
+                        (FUNCT3_OR, FUNCT7_OR) => self.registers[rd] = val1 | val2,
+                        (FUNCT3_AND, FUNCT7_AND) => self.registers[rd] = val1 & val2,
+                        (FUNCT3_XOR, FUNCT7_XOR) => self.registers[rd] = val1 ^ val2,
+                        (FUNCT3_SLT, FUNCT7_SLT) => {
+                            self.registers[rd] = if val1 < val2 { 1 } else { 0 }
+                        }
+                        (FUNCT3_SRL, FUNCT7_SRL) => self.registers[rd] = val1 >> val2,
+                        (FUNCT3_SRA, FUNCT7_SRA) => {
+                            self.registers[rd] = ((val1 as i64) >> (val2 as i64)) as u64
+                        }
                         _ => println!(
                             "Unsupported R-type: funct3={:#b}, funct7={:#b}",
                             funct3, funct7
                         ),
                     }
+                    const FUNCT3_SLT: u32 = 0b010;
+                    const FUNCT3_SRA: u32 = 0b101;
+                    const FUNCT3_SRL: u32 = 0b101;
+                    const FUNCT3_XOR: u32 = 0b100;
                 }
             }
             OP_IMM => {
