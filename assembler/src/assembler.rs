@@ -25,6 +25,8 @@ const FUNCT3_BLT: u32 = 0b100;
 const FUNCT3_BNE: u32 = 0b001;
 const FUNCT3_LD: u32 = 0b011;
 const FUNCT3_SD: u32 = 0b011;
+const FUNCT3_LB: u32 = 0b000;
+const FUNCT3_SB: u32 = 0b000;
 
 const FUNCT7_MULDIV: u32 = 0b0000001;
 const FUNCT7_ADD: u32 = 0b0000000;
@@ -186,6 +188,7 @@ pub fn parse_program(program: String) -> Vec<u8> {
         let operands = &tokens[1..];
 
         let encoded_inst = match instruction.as_str() {
+            // R-type Instructions (register-register)
             "add" | "sub" | "mul" | "div" => {
                 let rd = parse_register(operands[0]).unwrap();
                 let rs1 = parse_register(operands[1]).unwrap();
@@ -199,54 +202,81 @@ pub fn parse_program(program: String) -> Vec<u8> {
                 };
                 encode_r_type(funct7, rs2, rs1, funct3, rd, OP_REG)
             }
-            "addi" => encode_i_type(
-                operands[2].parse::<i32>().unwrap() as u32,
-                parse_register(operands[1]).unwrap(),
-                FUNCT3_ADDI,
-                parse_register(operands[0]).unwrap(),
-                OP_IMM,
-            ),
-            "lw" => {
-                let rd = parse_register(operands[0]).unwrap();
-                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                encode_i_type(offset as u32, base, FUNCT3_LW, rd, OP_LOAD)
+
+            // I-Type instructions
+            "addi" | "lw" | "ld" | "lb" | "jalr" | "ret" => {
+                if instruction == "ret" {
+                    encode_i_type(0, 1, 0b000, 0, OP_JALR)
+                } else {
+                    let rd = parse_register(operands[0]).unwrap();
+                    let rs1;
+                    let imm;
+                    let funct3;
+                    let opcode;
+
+                    match instruction.as_str() {
+                        "addi" => {
+                            rs1 = parse_register(operands[1]).unwrap();
+                            imm = operands[2].parse::<i32>().unwrap() as u32;
+                            funct3 = FUNCT3_ADDI;
+                            opcode = OP_IMM;
+                        }
+                        "lw" | "ld" | "lb" => {
+                            let (offset, base) = parse_memory_operand(operands[1]).unwrap();
+                            rs1 = base;
+                            imm = offset as u32;
+                            opcode = OP_LOAD;
+                            funct3 = match instruction.as_str() {
+                                "lw" => FUNCT3_LW,
+                                "ld" => FUNCT3_LD,
+                                "lb" => FUNCT3_LB,
+                                _ => unreachable!(),
+                            };
+                        }
+                        "jalr" => {
+                            rs1 = parse_register(operands[1]).unwrap();
+                            imm = 0;
+                            funct3 = 0b000;
+                            opcode = OP_JALR;
+                        }
+                        _ => unreachable!(),
+                    };
+
+                    encode_i_type(imm, rs1, funct3, rd, opcode)
+                }
             }
-            "sw" => {
+
+            // S-type Instructions
+            "sw" | "sd" | "sb" => {
                 let rs2 = parse_register(operands[0]).unwrap();
                 let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                encode_s_type(offset as u32, rs2, base, FUNCT3_SW, OP_STORE)
+                let funct3 = match instruction.as_str() {
+                    "sw" => FUNCT3_SW,
+                    "sd" => FUNCT3_SD,
+                    "sb" => FUNCT3_SB,
+                    _ => unreachable!(),
+                };
+                encode_s_type(offset as u32, rs2, base, funct3, OP_STORE)
             }
-            "ld" => {
-                let rd = parse_register(operands[0]).unwrap();
-                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                encode_i_type(offset as u32, base, FUNCT3_LD, rd, OP_LOAD)
-            }
-            "sd" => {
-                let rs2 = parse_register(operands[0]).unwrap();
-                let (offset, base) = parse_memory_operand(operands[1]).unwrap();
-                encode_s_type(offset as u32, rs2, base, FUNCT3_SD, OP_STORE)
-            }
-            "beq" => {
+
+            // SB-type Instructions
+            "beq" | "blt" | "bne" => {
                 let rs1 = parse_register(operands[0]).unwrap();
                 let rs2 = parse_register(operands[1]).unwrap();
-                let target_address = *symbol_table.get(operands[2]).expect("beq label not found");
+                let target_address = *symbol_table
+                    .get(operands[2])
+                    .expect("branch label not found");
                 let offset = (target_address as i64 - current_address as i64) as u32;
-                encode_sb_type(offset, rs2, rs1, FUNCT3_BEQ, OP_BRANCH)
+                let funct3 = match instruction.as_str() {
+                    "beq" => FUNCT3_BEQ,
+                    "blt" => FUNCT3_BLT,
+                    "bne" => FUNCT3_BNE,
+                    _ => unreachable!(),
+                };
+                encode_sb_type(offset, rs2, rs1, funct3, OP_BRANCH)
             }
-            "blt" => {
-                let rs1 = parse_register(operands[0]).unwrap();
-                let rs2 = parse_register(operands[1]).unwrap();
-                let target_address = *symbol_table.get(operands[2]).expect("blt label not found");
-                let offset = (target_address as i64 - current_address as i64) as u32;
-                encode_sb_type(offset, rs2, rs1, FUNCT3_BLT, OP_BRANCH)
-            }
-            "bne" => {
-                let rs1 = parse_register(operands[0]).unwrap();
-                let rs2 = parse_register(operands[1]).unwrap();
-                let target_address = *symbol_table.get(operands[2]).expect("bne label not found");
-                let offset = (target_address as i64 - current_address as i64) as u32;
-                encode_sb_type(offset, rs2, rs1, FUNCT3_BNE, OP_BRANCH)
-            }
+
+            // UJ-type Instructions
             "jal" => {
                 let rd = parse_register(operands[0]).unwrap();
                 let target_label = operands.get(1).unwrap_or(&"");
@@ -256,16 +286,10 @@ pub fn parse_program(program: String) -> Vec<u8> {
                 let offset = (target_address as i64 - current_address as i64) as u32;
                 encode_uj_type(offset, rd, OP_JAL)
             }
-            "jalr" => encode_i_type(
-                0,
-                parse_register(operands[1]).unwrap(),
-                0b000,
-                parse_register(operands[0]).unwrap(),
-                OP_JALR,
-            ),
-            "ret" => encode_i_type(0, 1, 0b000, 0, OP_JALR),
+
             "ecall" => encode_r_type(0, 0, 0, 0, 0, OP_SYSTEM),
             "halt" => OP_HALT,
+
             _ => {
                 eprintln!("Unknown instruction: {}", instruction);
                 exit(2);
