@@ -43,3 +43,7 @@ pub mod funct7 {
     pub const SRA: u32 = 0b0100000;
     pub const DEFAULT: u32 = 0b0000000;
 }
+
+pub mod system {
+    pub const FUNCT12_ECALL: u32 = 0x0;
+}

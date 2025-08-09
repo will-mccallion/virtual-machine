@@ -1,11 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use riscv_core::{funct3, funct7, opcodes};
-
-pub mod system {
-    pub const FUNCT12_ECALL: u32 = 0x0;
-}
+use riscv_core::{funct3, funct7, opcodes, system};
 
 const MEMORY_SIZE: usize = 1024 * 1024 * 128; // 128MB
 const CSR_SIZE: usize = 4096;

@@ -1,11 +1,10 @@
+use riscv_core::{funct3, funct7, opcodes};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
-use riscv_core::{funct3, funct7, opcodes};
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AssemblerError {
+pub enum AssemblerErrorKind {
     InvalidRegister(String),
     InvalidMemoryOperand(String),
     InvalidImmediateValue(String),
@@ -13,7 +12,7 @@ pub enum AssemblerError {
     UnknownInstruction(String),
 }
 
-impl fmt::Display for AssemblerError {
+impl fmt::Display for AssemblerErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::InvalidRegister(reg) => write!(f, "Invalid register name: '{}'", reg),
@@ -27,12 +26,23 @@ impl fmt::Display for AssemblerError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssemblerError {
+    pub line: usize,
+    pub kind: AssemblerErrorKind,
+}
+
+impl fmt::Display for AssemblerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Line {}: {}", self.line, self.kind)
+    }
+}
+
 impl Error for AssemblerError {}
 
 pub fn parse_program(program: &str) -> Result<Vec<u8>, AssemblerError> {
     let mut symbol_table = HashMap::new();
     let mut address_counter: u64 = 0;
-    let mut instruction_lines = Vec::new();
 
     for line in program.lines() {
         let clean_line = line.split('#').next().unwrap_or("").trim();
@@ -43,7 +53,6 @@ pub fn parse_program(program: &str) -> Result<Vec<u8>, AssemblerError> {
         if let Some(label) = clean_line.strip_suffix(':') {
             symbol_table.insert(label.to_string(), address_counter);
         } else {
-            instruction_lines.push(clean_line);
             address_counter += 4;
         }
     }
@@ -51,13 +60,26 @@ pub fn parse_program(program: &str) -> Result<Vec<u8>, AssemblerError> {
     let mut bin = Vec::new();
     let mut current_address: u64 = 0;
 
-    for line in instruction_lines {
-        let tokens: Vec<&str> = line.split_whitespace().collect();
+    for (i, line) in program.lines().enumerate() {
+        let line_number = i + 1;
+        let clean_line = line.split('#').next().unwrap_or("").trim();
+
+        if clean_line.is_empty() || clean_line.ends_with(':') {
+            continue;
+        }
+
+        let tokens: Vec<&str> = clean_line.split_whitespace().collect();
         let instruction = tokens[0].to_lowercase();
         let operands = &tokens[1..];
 
         let encoded_inst =
-            encode_instruction(&instruction, operands, current_address, &symbol_table)?;
+            encode_instruction(&instruction, operands, current_address, &symbol_table).map_err(
+                |kind| AssemblerError {
+                    line: line_number,
+                    kind,
+                },
+            )?;
+
         bin.extend_from_slice(&encoded_inst.to_le_bytes());
         current_address += 4;
     }
@@ -70,7 +92,7 @@ fn encode_instruction(
     operands: &[&str],
     current_address: u64,
     symbol_table: &HashMap<String, u64>,
-) -> Result<u32, AssemblerError> {
+) -> Result<u32, AssemblerErrorKind> {
     match instruction {
         // R-type
         "add" | "sub" | "mul" | "div" | "and" | "or" | "slt" | "sra" | "srl" | "xor" => {
@@ -99,7 +121,7 @@ fn encode_instruction(
                 "addi" => {
                     let rs1 = parse_register(operands[1])?;
                     let imm = operands[2].parse::<i32>().map_err(|_| {
-                        AssemblerError::InvalidImmediateValue(operands[2].to_string())
+                        AssemblerErrorKind::InvalidImmediateValue(operands[2].to_string())
                     })?;
                     (rs1, imm as u32, funct3::ADDI, opcodes::OP_IMM)
                 }
@@ -149,7 +171,7 @@ fn encode_instruction(
             let rs2 = parse_register(operands[1])?;
             let target_address = symbol_table
                 .get(operands[2])
-                .ok_or_else(|| AssemblerError::UndefinedLabel(operands[2].to_string()))?;
+                .ok_or_else(|| AssemblerErrorKind::UndefinedLabel(operands[2].to_string()))?;
             let offset = (*target_address as i64 - current_address as i64) as u32;
             let funct3 = match instruction {
                 "beq" => funct3::BEQ,
@@ -165,14 +187,16 @@ fn encode_instruction(
             let target_label = operands[1];
             let target_address = symbol_table
                 .get(target_label)
-                .ok_or_else(|| AssemblerError::UndefinedLabel(target_label.to_string()))?;
+                .ok_or_else(|| AssemblerErrorKind::UndefinedLabel(target_label.to_string()))?;
             let offset = (*target_address as i64 - current_address as i64) as u32;
             Ok(encode_uj_type(offset, rd, opcodes::OP_JAL))
         }
         // System and pseudo-instructions
         "ecall" => Ok(encode_r_type(0, 0, 0, 0, 0, opcodes::OP_SYSTEM)),
         "halt" => Ok(opcodes::OP_HALT),
-        _ => Err(AssemblerError::UnknownInstruction(instruction.to_string())),
+        _ => Err(AssemblerErrorKind::UnknownInstruction(
+            instruction.to_string(),
+        )),
     }
 }
 
@@ -205,7 +229,7 @@ fn encode_uj_type(imm: u32, rd: u32, opcode: u32) -> u32 {
     encoded_imm | (rd << 7) | opcode
 }
 
-fn parse_register(reg_str: &str) -> Result<u32, AssemblerError> {
+fn parse_register(reg_str: &str) -> Result<u32, AssemblerErrorKind> {
     match reg_str.trim_end_matches(',') {
         "zero" | "x0" => Ok(0),
         "ra" | "x1" => Ok(1),
@@ -239,21 +263,21 @@ fn parse_register(reg_str: &str) -> Result<u32, AssemblerError> {
         "t4" | "x29" => Ok(29),
         "t5" | "x30" => Ok(30),
         "t6" | "x31" => Ok(31),
-        _ => Err(AssemblerError::InvalidRegister(reg_str.to_string())),
+        _ => Err(AssemblerErrorKind::InvalidRegister(reg_str.to_string())),
     }
 }
 
-fn parse_memory_operand(operand: &str) -> Result<(i32, u32), AssemblerError> {
+fn parse_memory_operand(operand: &str) -> Result<(i32, u32), AssemblerErrorKind> {
     let open_paren = operand
         .find('(')
-        .ok_or_else(|| AssemblerError::InvalidMemoryOperand(operand.to_string()))?;
+        .ok_or_else(|| AssemblerErrorKind::InvalidMemoryOperand(operand.to_string()))?;
     let close_paren = operand
         .find(')')
-        .ok_or_else(|| AssemblerError::InvalidMemoryOperand(operand.to_string()))?;
+        .ok_or_else(|| AssemblerErrorKind::InvalidMemoryOperand(operand.to_string()))?;
     let offset_str = &operand[..open_paren];
     let offset = offset_str
         .parse::<i32>()
-        .map_err(|_| AssemblerError::InvalidImmediateValue(offset_str.to_string()))?;
+        .map_err(|_| AssemblerErrorKind::InvalidImmediateValue(offset_str.to_string()))?;
     let base_reg_str = &operand[open_paren + 1..close_paren];
     let base_reg = parse_register(base_reg_str)?;
     Ok((offset, base_reg))
