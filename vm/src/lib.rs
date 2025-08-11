@@ -1,7 +1,7 @@
+use assembler::Executable;
+use riscv_core::{funct3, funct7, opcodes, system};
 use std::error::Error;
 use std::fmt;
-
-use riscv_core::{funct3, funct7, opcodes, system};
 
 const MEMORY_SIZE: usize = 1024 * 1024 * 128; // 128MB
 const CSR_SIZE: usize = 4096;
@@ -9,6 +9,7 @@ const CSR_SIZE: usize = 4096;
 #[derive(Debug)]
 pub enum VMError {
     PcOutOfBounds(u64),
+    MemoryOutOfBounds(u64),
     UnknownOpcode(u32),
     Ecall,
 }
@@ -17,12 +18,14 @@ impl fmt::Display for VMError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Self::PcOutOfBounds(pc) => write!(f, "Program Counter out of bounds at {:#x}", pc),
+            Self::MemoryOutOfBounds(addr) => {
+                write!(f, "Memory access out of bounds at {:#x}", addr)
+            }
             Self::UnknownOpcode(opcode) => write!(f, "Unknown opcode encountered: {:#09b}", opcode),
             Self::Ecall => write!(f, "ECALL instruction executed, halting."),
         }
     }
 }
-
 impl Error for VMError {}
 
 pub struct VM {
@@ -44,18 +47,29 @@ impl VM {
         vm
     }
 
-    pub fn load_program(&mut self, program: &[u8]) {
-        self.memory[..program.len()].copy_from_slice(program);
+    pub fn load_executable(&mut self, executable: &Executable) -> Result<(), VMError> {
+        let text_size = executable.text.len();
+        let data_size = executable.data.len();
+
+        if text_size + data_size > MEMORY_SIZE {
+            return Err(VMError::MemoryOutOfBounds((text_size + data_size) as u64));
+        }
+
+        self.memory[..text_size].copy_from_slice(&executable.text);
+
+        self.memory[text_size..text_size + data_size].copy_from_slice(&executable.data);
+
+        self.pc = 0;
+
+        Ok(())
     }
 
     pub fn run(&mut self) -> Result<(), VMError> {
         loop {
             let instruction = self.fetch()?;
-
             if instruction == opcodes::OP_HALT {
                 break;
             }
-
             self.execute(instruction)?;
             self.registers[0] = 0;
         }
@@ -117,6 +131,12 @@ impl VM {
                     }
                 }
             }
+            opcodes::OP_AUIPC => {
+                if rd > 0 {
+                    let imm = (inst & 0xFFFFF000) as i32 as i64 as u64;
+                    self.registers[rd] = self.pc.wrapping_add(imm);
+                }
+            }
             opcodes::OP_IMM => {
                 if rd > 0 {
                     let imm = (inst as i32 >> 20) as i64 as u64;
@@ -127,6 +147,9 @@ impl VM {
                 if rd > 0 {
                     let imm = (inst as i32 >> 20) as i64 as u64;
                     let addr = self.registers[rs1].wrapping_add(imm) as usize;
+                    if addr + 8 > MEMORY_SIZE {
+                        return Err(VMError::MemoryOutOfBounds(addr as u64));
+                    }
                     match funct3 {
                         funct3::LW => {
                             let bytes: [u8; 4] = self.memory[addr..addr + 4].try_into().unwrap();
@@ -137,6 +160,7 @@ impl VM {
                             self.registers[rd] = u64::from_le_bytes(bytes);
                         }
                         funct3::LB => self.registers[rd] = self.memory[addr] as i8 as i64 as u64,
+                        funct3::LBU => self.registers[rd] = self.memory[addr] as u64,
                         _ => { /* Unsupported load variants */ }
                     }
                 }
@@ -147,6 +171,9 @@ impl VM {
                 let imm = (((imm11_5 << 5) | imm4_0) as i32) << 20 >> 20;
                 let addr = self.registers[rs1].wrapping_add(imm as i64 as u64) as usize;
                 let data = self.registers[rs2];
+                if addr + 8 > MEMORY_SIZE {
+                    return Err(VMError::MemoryOutOfBounds(addr as u64));
+                }
                 match funct3 {
                     funct3::SW => {
                         self.memory[addr..addr + 4].copy_from_slice(&(data as u32).to_le_bytes())
@@ -212,7 +239,6 @@ impl VM {
             "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11",
             "t3", "t4", "t5", "t6",
         ];
-
         println!("\n--- VM Execution Halted ---");
         println!("Final PC: {:#018x}", self.pc);
         println!("---------------------------------");
@@ -220,7 +246,7 @@ impl VM {
         println!("---------------------------------");
         for i in 0..32 {
             println!(
-                "x{:<2} ({:<4}) = {:#018x} ({})",
+                "x{:<2}  {:<4}  = {:#018x} ({})",
                 i, abi[i], self.registers[i], self.registers[i] as i64
             );
         }

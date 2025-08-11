@@ -1,50 +1,75 @@
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::process;
 
-// Declare the virtualmachine module, which corresponds to virtualmachine.rs
-mod virtualmachine;
+use assembler::Executable;
+use vm::VM;
 
-// Bring the VM and its error type into the current scope
-use virtualmachine::{VMError, VM};
+const MAGIC_NUMBER: &[u8; 4] = b"RZEB";
+const HEADER_SIZE: usize = 20; // 4 (magic) + 8 (text_size) + 8 (data_size)
 
-fn main() {
-    // We use a separate run function to allow for the '?' operator
-    // for easy error handling.
-    if let Err(e) = run() {
-        eprintln!("Error: {}", e);
-        process::exit(1);
-    }
-}
-
-fn run() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        // Return a proper error instead of exiting directly
-        return Err(format!("Usage: {} <path-to-bytecode-file>", args[0]).into());
+    if args.len() != 2 {
+        eprintln!("Usage: vm <input.bin>");
+        return Ok(());
     }
 
-    let file_path = &args[1];
-    println!("Loading program from: {}", file_path);
+    let input_path = &args[1];
 
-    // The '?' operator will propagate any I/O errors
-    let program = fs::read(file_path)?;
+    println!("[VM] Reading binary from '{}'", input_path);
+    let file_bytes = fs::read(input_path)?;
 
-    // Create and set up the VM
-    let mut vm = VM::new();
-    vm.load_program(&program);
+    println!("[VM] Parsing executable...");
+    match parse_executable(&file_bytes) {
+        Ok(executable) => {
+            println!(
+                "[VM] Executable loaded. .text size: {} bytes, .data size: {} bytes",
+                executable.text.len(),
+                executable.data.len()
+            );
+            let mut vm = VM::new();
+            if let Err(e) = vm.load_executable(&executable) {
+                eprintln!("[VM] Error loading executable into VM: {}", e);
+                return Ok(());
+            }
 
-    // Run the VM and handle its result
-    match vm.run() {
-        Ok(_) => println!("Program finished with HALT instruction."),
-        Err(VMError::Ecall) => println!("Program finished with ECALL."),
-        // Any other VM error will be propagated up to main
-        Err(e) => return Err(e.into()),
+            println!("\n--- Running VM ---");
+            match vm.run() {
+                Ok(()) => println!("--- Execution Finished ---"),
+                Err(e) => eprintln!("\n--- VM Execution Error: {} ---", e),
+            }
+
+            vm.print_state();
+        }
+        Err(e) => {
+            eprintln!("[VM] Error parsing binary file: {}", e);
+        }
     }
-
-    // Print the final state of the registers
-    vm.print_state();
 
     Ok(())
+}
+
+fn parse_executable(bytes: &[u8]) -> Result<Executable, String> {
+    if bytes.len() < HEADER_SIZE {
+        return Err("Invalid file: too short to be a valid executable.".to_string());
+    }
+
+    if &bytes[0..4] != MAGIC_NUMBER {
+        return Err("Invalid file: incorrect magic number.".to_string());
+    }
+
+    let text_size = u64::from_le_bytes(bytes[4..12].try_into().unwrap()) as usize;
+
+    let data_size = u64::from_le_bytes(bytes[12..20].try_into().unwrap()) as usize;
+
+    if bytes.len() != HEADER_SIZE + text_size + data_size {
+        return Err("Invalid file: file size does not match header values.".to_string());
+    }
+
+    let text = bytes[HEADER_SIZE..HEADER_SIZE + text_size].to_vec();
+
+    let data = bytes[HEADER_SIZE + text_size..HEADER_SIZE + text_size + data_size].to_vec();
+
+    Ok(Executable { text, data })
 }

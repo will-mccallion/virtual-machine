@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 riscv_core = { path = "../riscv_core" }
+assembler = { path = "../assembler/" }

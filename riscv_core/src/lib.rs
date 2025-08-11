@@ -10,7 +10,8 @@ pub mod opcodes {
     pub const OP_JALR: u32 = 0b1100111;
     pub const OP_JAL: u32 = 0b1101111;
     pub const OP_SYSTEM: u32 = 0b1110011;
-    pub const OP_HALT: u32 = 0x00000000;
+    pub const OP_HALT: u32 = 0b00000000;
+    pub const OP_AUIPC: u32 = 0b0010111;
 }
 
 pub mod funct3 {

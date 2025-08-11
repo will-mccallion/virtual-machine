@@ -3,6 +3,17 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Section {
+    Text,
+    Data,
+}
+
+pub struct Executable {
+    pub text: Vec<u8>,
+    pub data: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssemblerErrorKind {
     InvalidRegister(String),
@@ -10,6 +21,8 @@ pub enum AssemblerErrorKind {
     InvalidImmediateValue(String),
     UndefinedLabel(String),
     UnknownInstruction(String),
+    UnknownDirective(String),
+    ParseError(String),
 }
 
 impl fmt::Display for AssemblerErrorKind {
@@ -22,6 +35,8 @@ impl fmt::Display for AssemblerErrorKind {
             }
             Self::UndefinedLabel(label) => write!(f, "Use of undefined label: '{}'", label),
             Self::UnknownInstruction(inst) => write!(f, "Unknown instruction: '{}'", inst),
+            Self::UnknownDirective(dir) => write!(f, "Unknown directive: '{}'", dir),
+            Self::ParseError(msg) => write!(f, "Parse error: {}", msg),
         }
     }
 }
@@ -37,28 +52,86 @@ impl fmt::Display for AssemblerError {
         write!(f, "Line {}: {}", self.line, self.kind)
     }
 }
-
 impl Error for AssemblerError {}
 
-pub fn parse_program(program: &str) -> Result<Vec<u8>, AssemblerError> {
-    let mut symbol_table = HashMap::new();
-    let mut address_counter: u64 = 0;
+pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
+    let mut text_labels = HashMap::new();
+    let mut data_labels = HashMap::new();
 
-    for line in program.lines() {
+    let mut data_segment = Vec::new();
+    let mut text_segment_size: u64 = 0;
+
+    let mut current_section = Section::Text;
+
+    for (i, line) in program.lines().enumerate() {
+        let line_number = i + 1;
         let clean_line = line.split('#').next().unwrap_or("").trim();
         if clean_line.is_empty() {
             continue;
         }
 
+        if clean_line == ".text" {
+            current_section = Section::Text;
+            continue;
+        } else if clean_line == ".data" {
+            current_section = Section::Data;
+            continue;
+        }
+
         if let Some(label) = clean_line.strip_suffix(':') {
-            symbol_table.insert(label.to_string(), address_counter);
-        } else {
-            address_counter += 4;
+            match current_section {
+                Section::Text => {
+                    text_labels.insert(label.to_string(), text_segment_size);
+                }
+                Section::Data => {
+                    data_labels.insert(label.to_string(), data_segment.len() as u64);
+                }
+            }
+            continue;
+        }
+
+        let tokens: Vec<&str> = clean_line.split_whitespace().collect();
+        let mnemonic = tokens[0].to_lowercase();
+
+        match current_section {
+            Section::Text => {
+                if mnemonic == "la" {
+                    text_segment_size += 8;
+                } else {
+                    text_segment_size += 4;
+                }
+            }
+            Section::Data => {
+                let directive = &mnemonic;
+                let operands = &tokens[1..];
+                match directive.as_str() {
+                    ".word" => {
+                        let value_str = operands.join("");
+                        let value = value_str.parse::<u32>().map_err(|_| AssemblerError {
+                            line: line_number,
+                            kind: AssemblerErrorKind::InvalidImmediateValue(value_str.to_string()),
+                        })?;
+                        data_segment.extend_from_slice(&value.to_le_bytes());
+                    }
+                    ".string" => {
+                        let s = operands.join(" ").trim_matches('"').to_string();
+                        data_segment.extend_from_slice(s.as_bytes());
+                        data_segment.push(0);
+                    }
+                    _ => {
+                        return Err(AssemblerError {
+                            line: line_number,
+                            kind: AssemblerErrorKind::UnknownDirective(directive.to_string()),
+                        })
+                    }
+                }
+            }
         }
     }
 
-    let mut bin = Vec::new();
+    let mut text_segment = Vec::new();
     let mut current_address: u64 = 0;
+    current_section = Section::Text;
 
     for (i, line) in program.lines().enumerate() {
         let line_number = i + 1;
@@ -68,32 +141,56 @@ pub fn parse_program(program: &str) -> Result<Vec<u8>, AssemblerError> {
             continue;
         }
 
+        if clean_line == ".text" {
+            current_section = Section::Text;
+            continue;
+        }
+        if clean_line == ".data" {
+            current_section = Section::Data;
+            continue;
+        }
+        if current_section == Section::Data {
+            continue;
+        }
+
         let tokens: Vec<&str> = clean_line.split_whitespace().collect();
         let instruction = tokens[0].to_lowercase();
         let operands = &tokens[1..];
 
-        let encoded_inst =
-            encode_instruction(&instruction, operands, current_address, &symbol_table).map_err(
-                |kind| AssemblerError {
-                    line: line_number,
-                    kind,
-                },
-            )?;
+        let encoded_insts = encode_instruction(
+            &instruction,
+            operands,
+            current_address,
+            &text_labels,
+            &data_labels,
+            text_segment_size,
+        )
+        .map_err(|kind| AssemblerError {
+            line: line_number,
+            kind,
+        })?;
 
-        bin.extend_from_slice(&encoded_inst.to_le_bytes());
-        current_address += 4;
+        for inst in encoded_insts {
+            text_segment.extend_from_slice(&inst.to_le_bytes());
+            current_address += 4;
+        }
     }
 
-    Ok(bin)
+    Ok(Executable {
+        text: text_segment,
+        data: data_segment,
+    })
 }
 
 fn encode_instruction(
     instruction: &str,
     operands: &[&str],
     current_address: u64,
-    symbol_table: &HashMap<String, u64>,
-) -> Result<u32, AssemblerErrorKind> {
-    match instruction {
+    text_labels: &HashMap<String, u64>,
+    data_labels: &HashMap<String, u64>,
+    text_size: u64,
+) -> Result<Vec<u32>, AssemblerErrorKind> {
+    let single_instr = match instruction {
         // R-type
         "add" | "sub" | "mul" | "div" | "and" | "or" | "slt" | "sra" | "srl" | "xor" => {
             let rd = parse_register(operands[0])?;
@@ -169,7 +266,7 @@ fn encode_instruction(
         "beq" | "blt" | "bne" => {
             let rs1 = parse_register(operands[0])?;
             let rs2 = parse_register(operands[1])?;
-            let target_address = symbol_table
+            let target_address = text_labels
                 .get(operands[2])
                 .ok_or_else(|| AssemblerErrorKind::UndefinedLabel(operands[2].to_string()))?;
             let offset = (*target_address as i64 - current_address as i64) as u32;
@@ -185,32 +282,57 @@ fn encode_instruction(
         "jal" => {
             let rd = parse_register(operands[0])?;
             let target_label = operands[1];
-            let target_address = symbol_table
+            let target_address = text_labels
                 .get(target_label)
                 .ok_or_else(|| AssemblerErrorKind::UndefinedLabel(target_label.to_string()))?;
             let offset = (*target_address as i64 - current_address as i64) as u32;
             Ok(encode_uj_type(offset, rd, opcodes::OP_JAL))
         }
-        // System and pseudo-instructions
-        "ecall" => Ok(encode_r_type(0, 0, 0, 0, 0, opcodes::OP_SYSTEM)),
+        "la" => {
+            let rd = parse_register(operands[0])?;
+            let label = operands[1];
+
+            let target_address = if let Some(addr) = data_labels.get(label) {
+                text_size + addr
+            } else if let Some(addr) = text_labels.get(label) {
+                *addr
+            } else {
+                return Err(AssemblerErrorKind::UndefinedLabel(label.to_string()));
+            };
+
+            let offset = target_address as i64 - current_address as i64;
+
+            let upper = (offset + 0x800) as u32 & 0xFFFFF000;
+            let lower = (offset - upper as i64) as u32;
+
+            let auipc = encode_u_type(upper, rd, opcodes::OP_AUIPC);
+            let addi = encode_i_type(lower, rd, funct3::ADDI, rd, opcodes::OP_IMM);
+
+            return Ok(vec![auipc, addi]);
+        }
+        "ecall" => Ok(encode_i_type(0, 0, 0, 0, opcodes::OP_SYSTEM)),
         "halt" => Ok(opcodes::OP_HALT),
         _ => Err(AssemblerErrorKind::UnknownInstruction(
             instruction.to_string(),
         )),
-    }
+    }?;
+    Ok(vec![single_instr])
 }
 
 fn encode_r_type(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
     (funct7 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
 }
+
 fn encode_i_type(imm: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
     (imm << 20) | (rs1 << 15) | (funct3 << 12) | (rd << 7) | opcode
 }
+
 fn encode_s_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
     let imm11_5 = (imm >> 5) & 0x7F;
     let imm4_0 = imm & 0x1F;
     (imm11_5 << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm4_0 << 7) | opcode
 }
+
 fn encode_sb_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32 {
     let imm12 = (imm >> 12) & 1;
     let imm11 = (imm >> 11) & 1;
@@ -220,6 +342,11 @@ fn encode_sb_type(imm: u32, rs2: u32, rs1: u32, funct3: u32, opcode: u32) -> u32
     let imm_lo = (imm4_1 << 1) | imm11;
     (imm_hi << 25) | (rs2 << 20) | (rs1 << 15) | (funct3 << 12) | (imm_lo << 7) | opcode
 }
+
+fn encode_u_type(imm: u32, rd: u32, opcode: u32) -> u32 {
+    imm | (rd << 7) | opcode
+}
+
 fn encode_uj_type(imm: u32, rd: u32, opcode: u32) -> u32 {
     let imm20 = (imm >> 20) & 1;
     let imm10_1 = (imm >> 1) & 0x3ff;
@@ -268,17 +395,25 @@ fn parse_register(reg_str: &str) -> Result<u32, AssemblerErrorKind> {
 }
 
 fn parse_memory_operand(operand: &str) -> Result<(i32, u32), AssemblerErrorKind> {
-    let open_paren = operand
-        .find('(')
-        .ok_or_else(|| AssemblerErrorKind::InvalidMemoryOperand(operand.to_string()))?;
-    let close_paren = operand
-        .find(')')
-        .ok_or_else(|| AssemblerErrorKind::InvalidMemoryOperand(operand.to_string()))?;
-    let offset_str = &operand[..open_paren];
-    let offset = offset_str
-        .parse::<i32>()
-        .map_err(|_| AssemblerErrorKind::InvalidImmediateValue(offset_str.to_string()))?;
-    let base_reg_str = &operand[open_paren + 1..close_paren];
-    let base_reg = parse_register(base_reg_str)?;
+    if !operand.ends_with(')') {
+        return Err(AssemblerErrorKind::InvalidMemoryOperand(
+            operand.to_string(),
+        ));
+    }
+    let parts: Vec<&str> = operand[..operand.len() - 1].split('(').collect();
+    if parts.len() != 2 {
+        return Err(AssemblerErrorKind::InvalidMemoryOperand(
+            operand.to_string(),
+        ));
+    }
+    let offset_str = parts[0];
+    let offset = if offset_str.is_empty() {
+        0
+    } else {
+        offset_str
+            .parse::<i32>()
+            .map_err(|_| AssemblerErrorKind::InvalidImmediateValue(offset_str.to_string()))?
+    };
+    let base_reg = parse_register(parts[1])?;
     Ok((offset, base_reg))
 }
