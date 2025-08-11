@@ -2,9 +2,11 @@ use assembler::Executable;
 use riscv_core::{funct3, funct7, opcodes, system};
 use std::error::Error;
 use std::fmt;
+use std::process::exit;
 
-const MEMORY_SIZE: usize = 1024 * 1024 * 128; // 128MB
+const MEMORY_SIZE: usize = 1024 * 1024 * 128; // 128MB of physical RAM
 const CSR_SIZE: usize = 4096;
+const BASE_ADDRESS: u64 = 0x80000000;
 
 #[derive(Debug)]
 pub enum VMError {
@@ -39,11 +41,11 @@ impl VM {
     pub fn new() -> Self {
         let mut vm = Self {
             registers: [0; 32],
-            pc: 0,
+            pc: BASE_ADDRESS,
             memory: vec![0; MEMORY_SIZE],
             csr: [0; CSR_SIZE],
         };
-        vm.registers[2] = MEMORY_SIZE as u64;
+        vm.registers[2] = BASE_ADDRESS + MEMORY_SIZE as u64;
         vm
     }
 
@@ -51,17 +53,49 @@ impl VM {
         let text_size = executable.text.len();
         let data_size = executable.data.len();
 
-        if text_size + data_size > MEMORY_SIZE {
-            return Err(VMError::MemoryOutOfBounds((text_size + data_size) as u64));
+        let text_phys_addr = self.translate_addr(BASE_ADDRESS)?;
+        let data_phys_addr = text_phys_addr + text_size;
+
+        if data_phys_addr + data_size > self.memory.len() {
+            return Err(VMError::MemoryOutOfBounds(
+                BASE_ADDRESS + (data_phys_addr + data_size) as u64,
+            ));
         }
 
-        self.memory[..text_size].copy_from_slice(&executable.text);
+        self.memory[text_phys_addr..text_phys_addr + text_size].copy_from_slice(&executable.text);
+        self.memory[data_phys_addr..data_phys_addr + data_size].copy_from_slice(&executable.data);
 
-        self.memory[text_size..text_size + data_size].copy_from_slice(&executable.data);
-
-        self.pc = 0;
-
+        self.pc = BASE_ADDRESS;
         Ok(())
+    }
+
+    fn handle_syscall(&mut self) -> Result<bool, VMError> {
+        let syscall_num = self.registers[17];
+
+        match syscall_num {
+            93 => {
+                let exit_code = self.registers[10];
+                self.print_state();
+                exit(exit_code as i32);
+            }
+            _ => {
+                println!("Unknown syscall {}", syscall_num);
+                self.print_state();
+                exit(1);
+            }
+        }
+    }
+
+    fn translate_addr(&self, vaddr: u64) -> Result<usize, VMError> {
+        if vaddr < BASE_ADDRESS {
+            return Err(VMError::MemoryOutOfBounds(vaddr));
+        }
+        let paddr = (vaddr - BASE_ADDRESS) as usize;
+        if paddr >= self.memory.len() {
+            Err(VMError::MemoryOutOfBounds(vaddr))
+        } else {
+            Ok(paddr)
+        }
     }
 
     pub fn run(&mut self) -> Result<(), VMError> {
@@ -77,11 +111,10 @@ impl VM {
     }
 
     fn fetch(&self) -> Result<u32, VMError> {
-        let pc = self.pc as usize;
-        if pc + 4 > self.memory.len() {
-            return Err(VMError::PcOutOfBounds(self.pc));
-        }
-        let inst_bytes: [u8; 4] = self.memory[pc..pc + 4].try_into().unwrap();
+        let pc_phys = self.translate_addr(self.pc)?;
+        let inst_bytes: [u8; 4] = self.memory[pc_phys..pc_phys + 4]
+            .try_into()
+            .map_err(|_| VMError::PcOutOfBounds(self.pc))?;
         Ok(u32::from_le_bytes(inst_bytes))
     }
 
@@ -127,7 +160,7 @@ impl VM {
                         (funct3::SRA, funct7::SRA) => {
                             self.registers[rd] = ((val1 as i64) >> val2) as u64
                         }
-                        _ => { /* Unsupported R-type variants can be added here */ }
+                        _ => {}
                     }
                 }
             }
@@ -146,22 +179,21 @@ impl VM {
             opcodes::OP_LOAD => {
                 if rd > 0 {
                     let imm = (inst as i32 >> 20) as i64 as u64;
-                    let addr = self.registers[rs1].wrapping_add(imm) as usize;
-                    if addr + 8 > MEMORY_SIZE {
-                        return Err(VMError::MemoryOutOfBounds(addr as u64));
-                    }
+                    let vaddr = self.registers[rs1].wrapping_add(imm);
+                    let paddr = self.translate_addr(vaddr)?;
+
                     match funct3 {
                         funct3::LW => {
-                            let bytes: [u8; 4] = self.memory[addr..addr + 4].try_into().unwrap();
+                            let bytes: [u8; 4] = self.memory[paddr..paddr + 4].try_into().unwrap();
                             self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
                         }
                         funct3::LD => {
-                            let bytes: [u8; 8] = self.memory[addr..addr + 8].try_into().unwrap();
+                            let bytes: [u8; 8] = self.memory[paddr..paddr + 8].try_into().unwrap();
                             self.registers[rd] = u64::from_le_bytes(bytes);
                         }
-                        funct3::LB => self.registers[rd] = self.memory[addr] as i8 as i64 as u64,
-                        funct3::LBU => self.registers[rd] = self.memory[addr] as u64,
-                        _ => { /* Unsupported load variants */ }
+                        funct3::LB => self.registers[rd] = self.memory[paddr] as i8 as i64 as u64,
+                        funct3::LBU => self.registers[rd] = self.memory[paddr] as u64,
+                        _ => {}
                     }
                 }
             }
@@ -169,18 +201,19 @@ impl VM {
                 let imm4_0 = (inst >> 7) & 0x1F;
                 let imm11_5 = (inst >> 25) & 0x7F;
                 let imm = (((imm11_5 << 5) | imm4_0) as i32) << 20 >> 20;
-                let addr = self.registers[rs1].wrapping_add(imm as i64 as u64) as usize;
+                let vaddr = self.registers[rs1].wrapping_add(imm as i64 as u64);
+                let paddr = self.translate_addr(vaddr)?;
                 let data = self.registers[rs2];
-                if addr + 8 > MEMORY_SIZE {
-                    return Err(VMError::MemoryOutOfBounds(addr as u64));
-                }
+
                 match funct3 {
                     funct3::SW => {
-                        self.memory[addr..addr + 4].copy_from_slice(&(data as u32).to_le_bytes())
+                        self.memory[paddr..paddr + 4].copy_from_slice(&(data as u32).to_le_bytes())
                     }
-                    funct3::SD => self.memory[addr..addr + 8].copy_from_slice(&data.to_le_bytes()),
-                    funct3::SB => self.memory[addr] = data as u8,
-                    _ => { /* Unsupported store variants */ }
+                    funct3::SD => {
+                        self.memory[paddr..paddr + 8].copy_from_slice(&data.to_le_bytes())
+                    }
+                    funct3::SB => self.memory[paddr] = data as u8,
+                    _ => {}
                 }
             }
             opcodes::OP_BRANCH => {
@@ -223,7 +256,9 @@ impl VM {
             opcodes::OP_SYSTEM => {
                 let funct12 = (inst >> 20) & 0xFFF;
                 if funct12 == system::FUNCT12_ECALL {
-                    return Err(VMError::Ecall);
+                    if !self.handle_syscall()? {
+                        return Ok(());
+                    }
                 }
             }
             _ => return Err(VMError::UnknownOpcode(opcode)),
@@ -239,8 +274,9 @@ impl VM {
             "a4", "a5", "a6", "a7", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11",
             "t3", "t4", "t5", "t6",
         ];
+        println!();
+        println!("---------------------------------");
         println!("\n--- VM Execution Halted ---");
-        println!("Final PC: {:#018x}", self.pc);
         println!("---------------------------------");
         println!("General Purpose Registers");
         println!("---------------------------------");
@@ -251,5 +287,8 @@ impl VM {
             );
         }
         println!("---------------------------------");
+        println!("Final PC: {:#018x}", self.pc);
+        println!("---------------------------------");
+        println!();
     }
 }

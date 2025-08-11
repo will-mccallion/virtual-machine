@@ -3,12 +3,15 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 
+const BASE_ADDRESS: u64 = 0x80000000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Section {
     Text,
     Data,
 }
 
+#[derive(Debug, Clone)]
 pub struct Executable {
     pub text: Vec<u8>,
     pub data: Vec<u8>,
@@ -140,7 +143,6 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
         if clean_line.is_empty() || clean_line.ends_with(':') {
             continue;
         }
-
         if clean_line == ".text" {
             current_section = Section::Text;
             continue;
@@ -292,15 +294,16 @@ fn encode_instruction(
             let rd = parse_register(operands[0])?;
             let label = operands[1];
 
-            let target_address = if let Some(addr) = data_labels.get(label) {
-                text_size + addr
-            } else if let Some(addr) = text_labels.get(label) {
-                *addr
+            let target_address = if let Some(addr_offset) = data_labels.get(label) {
+                BASE_ADDRESS + text_size + addr_offset
+            } else if let Some(addr_offset) = text_labels.get(label) {
+                BASE_ADDRESS + addr_offset
             } else {
                 return Err(AssemblerErrorKind::UndefinedLabel(label.to_string()));
             };
 
-            let offset = target_address as i64 - current_address as i64;
+            let current_pc = BASE_ADDRESS + current_address;
+            let offset = target_address as i64 - current_pc as i64;
 
             let upper = (offset + 0x800) as u32 & 0xFFFFF000;
             let lower = (offset - upper as i64) as u32;
