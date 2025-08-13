@@ -1,54 +1,60 @@
+use assembler::parse_program;
 use std::env;
 use std::fs;
+use std::io::Write;
 
-use assembler::{parse_program, Executable};
-
-const MAGIC_NUMBER: &[u8; 4] = b"RZEB";
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+// A basic main function to run the assembler as a command-line tool.
+fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 3 {
-        eprintln!("Usage: assembler <input.s> <output.bin>");
-        return Ok(());
+    if args.len() != 2 && args.len() != 4 {
+        eprintln!("Usage: {} <input.s> [-o <output.bin>]", args[0]);
+        return;
     }
 
     let input_path = &args[1];
-    let output_path = &args[2];
+    let output_path = if args.len() == 4 && args[2] == "-o" {
+        &args[3]
+    } else {
+        "a.out"
+    };
 
-    println!("[ASM] Reading source from '{}'", input_path);
-    let source_code = fs::read_to_string(input_path)?;
+    let source_code = match fs::read_to_string(input_path) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("Error: Failed to read file '{}': {}", input_path, e);
+            return;
+        }
+    };
 
-    println!("[ASM] Assembling program...");
     match parse_program(&source_code) {
         Ok(executable) => {
-            println!(
-                "[ASM] Assembly successful. .text size: {} bytes, .data size: {} bytes",
-                executable.text.len(),
-                executable.data.len()
-            );
-            write_executable(output_path, &executable)?;
-            println!("[ASM] Wrote binary to '{}'", output_path);
+            // In a real assembler, you'd likely write out an ELF or other object format.
+            // For this example, we'll just concatenate .text and .data.
+            let mut output_bytes = Vec::new();
+            output_bytes.extend(&executable.text);
+            output_bytes.extend(&executable.data);
+
+            match fs::File::create(output_path) {
+                Ok(mut f) => {
+                    if let Err(e) = f.write_all(&output_bytes) {
+                        eprintln!(
+                            "Error: Failed to write to output file '{}': {}",
+                            output_path, e
+                        );
+                    } else {
+                        println!("Assembly successful. Output written to '{}'.", output_path);
+                    }
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Error: Failed to create output file '{}': {}",
+                        output_path, e
+                    );
+                }
+            }
         }
         Err(e) => {
-            eprintln!("Assembly Error: {}", e);
+            eprintln!("Assembly failed: {}", e);
         }
     }
-
-    Ok(())
-}
-
-fn write_executable(path: &str, executable: &Executable) -> Result<(), std::io::Error> {
-    let mut file_contents = Vec::new();
-
-    file_contents.extend_from_slice(MAGIC_NUMBER);
-
-    file_contents.extend_from_slice(&(executable.text.len() as u64).to_le_bytes());
-
-    file_contents.extend_from_slice(&(executable.data.len() as u64).to_le_bytes());
-
-    file_contents.extend_from_slice(&executable.text);
-
-    file_contents.extend_from_slice(&executable.data);
-
-    fs::write(path, file_contents)
 }
