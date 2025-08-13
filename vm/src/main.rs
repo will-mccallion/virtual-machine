@@ -35,10 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
 
             println!("\n--- Running VM ---");
-            match vm.run() {
-                Ok(()) => println!("--- Execution Finished ---"),
-                Err(e) => eprintln!("\n--- VM Execution Error: {} ---", e),
-            }
+            vm.run();
 
             vm.print_state();
         }

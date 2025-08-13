@@ -1,4 +1,4 @@
-use riscv_core::{funct3, funct7, opcodes};
+use riscv_core::{funct3, funct7, opcodes, system};
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -13,6 +13,7 @@ enum Section {
 
 #[derive(Debug, Clone)]
 pub struct Executable {
+    // PRIO 5: # TODO: Add a `.bss` field to the executable to represent the size of the zero-initialized data section.
     pub text: Vec<u8>,
     pub data: Vec<u8>,
 }
@@ -22,6 +23,7 @@ pub enum AssemblerErrorKind {
     InvalidRegister(String),
     InvalidMemoryOperand(String),
     InvalidImmediateValue(String),
+    ImmediateOutOfRange(String),
     UndefinedLabel(String),
     UnknownInstruction(String),
     UnknownDirective(String),
@@ -36,6 +38,7 @@ impl fmt::Display for AssemblerErrorKind {
             Self::InvalidImmediateValue(val) => {
                 write!(f, "Cannot parse immediate value: '{}'", val)
             }
+            Self::ImmediateOutOfRange(val) => write!(f, "Immediate value out of range: '{}'", val),
             Self::UndefinedLabel(label) => write!(f, "Use of undefined label: '{}'", label),
             Self::UnknownInstruction(inst) => write!(f, "Unknown instruction: '{}'", inst),
             Self::UnknownDirective(dir) => write!(f, "Unknown directive: '{}'", dir),
@@ -58,6 +61,7 @@ impl fmt::Display for AssemblerError {
 impl Error for AssemblerError {}
 
 pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
+    // PRIO 4: # TODO: Add support for standard assembler directives like `.global` (to define entry points), `.equ` (to define constants), and `.align n` (to ensure proper memory alignment).
     let mut text_labels = HashMap::new();
     let mut data_labels = HashMap::new();
 
@@ -66,6 +70,7 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
 
     let mut current_section = Section::Text;
 
+    // First pass: Calculate label addresses and data segment contents
     for (i, line) in program.lines().enumerate() {
         let line_number = i + 1;
         let clean_line = line.split('#').next().unwrap_or("").trim();
@@ -98,6 +103,8 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
 
         match current_section {
             Section::Text => {
+                // PRIO 2: # FIX: This instruction size logic is not robust. A proper function should determine the size of each instruction, including pseudo-instructions which can expand to multiple real instructions.
+                // PRIO 2: # TODO: Create a function `get_instruction_size(mnemonic, operands)` that returns the byte size (e.g., `la` is 8, `jal` is 4) to correctly calculate `text_segment_size`.
                 if mnemonic == "la" {
                     text_segment_size += 8;
                 } else {
@@ -105,18 +112,23 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
                 }
             }
             Section::Data => {
+                // PRIO 3: # TODO: Add support for other standard data directives: `.byte` (8-bit), `.half` (16-bit), `.dword` (32-bit), `.quad` (64-bit), and `.zero n` (to allocate n zero-filled bytes).
                 let directive = &mnemonic;
                 let operands = &tokens[1..];
                 match directive.as_str() {
                     ".word" => {
-                        let value_str = operands.join("");
-                        let value = value_str.parse::<u32>().map_err(|_| AssemblerError {
-                            line: line_number,
-                            kind: AssemblerErrorKind::InvalidImmediateValue(value_str.to_string()),
-                        })?;
-                        data_segment.extend_from_slice(&value.to_le_bytes());
+                        for op in operands {
+                            let value_str = op.trim_end_matches(',');
+                            let value = value_str.parse::<u32>().map_err(|_| AssemblerError {
+                                line: line_number,
+                                kind: AssemblerErrorKind::InvalidImmediateValue(
+                                    value_str.to_string(),
+                                ),
+                            })?;
+                            data_segment.extend_from_slice(&value.to_le_bytes());
+                        }
                     }
-                    ".string" => {
+                    ".asciz" => {
                         let s = operands.join(" ").trim_matches('"').to_string();
                         data_segment.extend_from_slice(s.as_bytes());
                         data_segment.push(0);
@@ -136,6 +148,7 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
     let mut current_address: u64 = 0;
     current_section = Section::Text;
 
+    // Second pass: Encode instructions
     for (i, line) in program.lines().enumerate() {
         let line_number = i + 1;
         let clean_line = line.split('#').next().unwrap_or("").trim();
@@ -192,28 +205,32 @@ fn encode_instruction(
     data_labels: &HashMap<String, u64>,
     text_size: u64,
 ) -> Result<Vec<u32>, AssemblerErrorKind> {
+    // PRIO 3: # TODO: Implement more common pseudo-instructions: `li` (load immediate), `mv` (move register), `j` (unconditional jump), `call`, and `nop`.
     let single_instr = match instruction {
         // R-type
+        // PRIO 2: # TODO: Add assembler support for remaining RV64I R-type instructions: SLL, SLTU, ADDW, SUBW, SLLW, SRLW, SRAW.
+        // PRIO 4: # TODO: Add support for the 'M' extension R-type instructions: MULH, MULHSU, MULHU, DIVU, REM, REMU, DIVW, REMW.
         "add" | "sub" | "mul" | "div" | "and" | "or" | "slt" | "sra" | "srl" | "xor" => {
             let rd = parse_register(operands[0])?;
             let rs1 = parse_register(operands[1])?;
             let rs2 = parse_register(operands[2])?;
             let (funct7, funct3) = match instruction {
-                "add" => (funct7::ADD, funct3::ADD_SUB),
+                "add" => (funct7::DEFAULT, funct3::ADD_SUB),
                 "sub" => (funct7::SUB, funct3::ADD_SUB),
                 "mul" => (funct7::MULDIV, funct3::MUL),
                 "div" => (funct7::MULDIV, funct3::DIV),
                 "and" => (funct7::DEFAULT, funct3::AND),
                 "or" => (funct7::DEFAULT, funct3::OR),
                 "slt" => (funct7::DEFAULT, funct3::SLT),
-                "sra" => (funct7::SRA, funct3::SRA),
-                "srl" => (funct7::DEFAULT, funct3::SRL),
+                "sra" => (funct7::SRA, funct3::SRL_SRA),
+                "srl" => (funct7::DEFAULT, funct3::SRL_SRA),
                 "xor" => (funct7::DEFAULT, funct3::XOR),
                 _ => unreachable!(),
             };
             Ok(encode_r_type(funct7, rs2, rs1, funct3, rd, opcodes::OP_REG))
         }
         // I-type
+        // PRIO 2: # TODO: Add assembler support for other I-type instructions: SLTI, SLTIU, XORI, ORI, ANDI, SLLI, SRLI, SRAI, and the 64-bit variants (ADDIW, SLLIW, SRLIW, SRAIW).
         "addi" | "lw" | "ld" | "lb" | "lbu" | "jalr" => {
             let rd = parse_register(operands[0])?;
             let (rs1, imm, funct3, opcode) = match instruction {
@@ -222,9 +239,10 @@ fn encode_instruction(
                     let imm = operands[2].parse::<i32>().map_err(|_| {
                         AssemblerErrorKind::InvalidImmediateValue(operands[2].to_string())
                     })?;
-                    (rs1, imm as u32, funct3::ADDI, opcodes::OP_IMM)
+                    (rs1, imm as u32, funct3::ADD_SUB, opcodes::OP_IMM)
                 }
                 "lw" | "ld" | "lb" | "lbu" => {
+                    // PRIO 2: # TODO: Add support for LH and LHU load instructions.
                     let (offset, base) = parse_memory_operand(operands[1])?;
                     let funct3 = match instruction {
                         "lw" => funct3::LW,
@@ -237,7 +255,7 @@ fn encode_instruction(
                 }
                 "jalr" => (
                     parse_register(operands[1])?,
-                    0,
+                    0, // PRIO 3: # TODO: JALR can have an immediate offset. This should be parsed from the memory operand format, e.g., `jalr ra, 16(sp)`.
                     funct3::ADD_SUB,
                     opcodes::OP_JALR,
                 ),
@@ -247,6 +265,7 @@ fn encode_instruction(
         }
         "ret" => Ok(encode_i_type(0, 1, funct3::ADD_SUB, 0, opcodes::OP_JALR)),
         // S-type
+        // PRIO 2: # TODO: Add assembler support for `sh` (store halfword).
         "sw" | "sd" | "sb" => {
             let rs2 = parse_register(operands[0])?;
             let (offset, base) = parse_memory_operand(operands[1])?;
@@ -265,6 +284,7 @@ fn encode_instruction(
             ))
         }
         // SB-type
+        // PRIO 2: # TODO: Add assembler support for other standard branch instructions: BGE, BGEU, and BLTU.
         "beq" | "blt" | "bne" => {
             let rs1 = parse_register(operands[0])?;
             let rs2 = parse_register(operands[1])?;
@@ -305,16 +325,23 @@ fn encode_instruction(
             let current_pc = BASE_ADDRESS + current_address;
             let offset = target_address as i64 - current_pc as i64;
 
+            // PRIO 5: # TODO: The calculation for the AUIPC+ADDI pair needs to be precise. The standard algorithm involves adding 0x800 to handle rounding correctly before extracting the upper 20 bits.
             let upper = (offset + 0x800) as u32 & 0xFFFFF000;
             let lower = (offset - upper as i64) as u32;
 
             let auipc = encode_u_type(upper, rd, opcodes::OP_AUIPC);
-            let addi = encode_i_type(lower, rd, funct3::ADDI, rd, opcodes::OP_IMM);
+            let addi = encode_i_type(lower, rd, funct3::ADD_SUB, rd, opcodes::OP_IMM);
 
             return Ok(vec![auipc, addi]);
         }
-        "ecall" => Ok(encode_i_type(0, 0, 0, 0, opcodes::OP_SYSTEM)),
-        "halt" => Ok(opcodes::OP_HALT),
+        // PRIO 4: # TODO: Add support for `ebreak` for debuggers.
+        "ecall" => Ok(encode_i_type(
+            system::FUNCT12_ECALL,
+            0,
+            0,
+            0,
+            opcodes::OP_SYSTEM,
+        )),
         _ => Err(AssemblerErrorKind::UnknownInstruction(
             instruction.to_string(),
         )),
@@ -411,6 +438,7 @@ fn parse_memory_operand(operand: &str) -> Result<(i32, u32), AssemblerErrorKind>
     }
     let offset_str = parts[0];
     let offset = if offset_str.is_empty() {
+        // PRIO 2: # FIX: This parsing for `offset(base)` is not robust. It should handle optional whitespace and correctly parse negative offsets.
         0
     } else {
         offset_str

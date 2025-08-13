@@ -1,6 +1,14 @@
+.data
+fib_n:
+    .word 8
+
+.text
 main:
-    addi a0, zero, 8
+    la a0, fib_n
+    lw a0, 0(a0)
     jal ra, fib             # Calculate fib(8) and put it in a0
+    addi a0, zero, 0
+    addi a7, zero, 93
     ecall
 
 #
@@ -35,6 +43,7 @@ fib:
     add a0, s1, a0          # a0 <- fib(n-1) + fib(n-2)
 
 end_fib:
+    add t0, a0, zero
     ld s0, 0(sp)            # Restore registers from stack
     ld s1, 8(sp)
     ld ra, 16(sp)
