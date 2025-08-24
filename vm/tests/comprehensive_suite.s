@@ -14,6 +14,7 @@
 # DATA SECTION
 # =============================================================================
 .section .data
+    .align 3
     val1:               .quad 20480
     val2:               .quad 0xFFFFFF
     val3:               .quad 0x0000000080000000
@@ -35,15 +36,22 @@
     val_neg_100:        .quad -100
     val_i64_max:        .quad 0x7FFFFFFFFFFFFFFF
     val_i64_min:        .quad 0x8000000000000000
+
+    .align 2
     val_i32_max:        .word 0x7FFFFFFF
     val_i32_min:        .word 0x80000000
+
+    .align 3
     val_u64_large:      .quad 0xFFFFFFFFFFFFFFF0
+
+    .align 2
     val_u32_large:      .word 0xFFFFFFF0
+
+    .align 3
     val_bitmask_a:      .quad 0xAAAAAAAAAAAAAAAA
     val_bitmask_5:      .quad 0x5555555555555555
     val_store_pattern:  .quad 0xCAFEF00DBAADF00D
 
-# =============================================================================
 # BSS SECTION (THE REPORT CARD)
 # =============================================================================
 .section .bss
