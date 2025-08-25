@@ -4,6 +4,7 @@ use riscv_core::cause;
 pub const MEMORY_SIZE: usize = 1024 * 1024 * 128; // 128MB of physical RAM
 pub const BASE_ADDRESS: u64 = 0x80000000;
 pub const VIRTUAL_DISK_ADDRESS: u64 = 0x90000000;
+pub const VIRTUAL_DISK_SIZE_ADDRESS: u64 = 0x90001000;
 
 impl VM {
     pub fn translate_addr(&self, vaddr: u64) -> Result<usize, u64> {

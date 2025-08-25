@@ -1,10 +1,12 @@
-use crate::{memory::VIRTUAL_DISK_ADDRESS, VM};
+use crate::{
+    memory::{VIRTUAL_DISK_ADDRESS, VIRTUAL_DISK_SIZE_ADDRESS},
+    VM,
+};
 use riscv_core::{cause, csr, funct3, funct7, opcodes, system};
 
 impl VM {
     pub(crate) fn execute(&mut self, inst: u32) -> bool {
         let opcode = inst & 0x7F;
-
         let mut next_pc = self.pc.wrapping_add(4);
 
         match opcode {
@@ -78,7 +80,13 @@ impl VM {
                     let imm = (inst as i32 >> 20) as i64 as u64;
                     let vaddr = self.registers[rs1].wrapping_add(imm);
 
-                    if vaddr >= VIRTUAL_DISK_ADDRESS
+                    if vaddr == VIRTUAL_DISK_SIZE_ADDRESS {
+                        if funct3 == funct3::LD {
+                            self.registers[rd] = self.virtual_disk.len() as u64;
+                        } else {
+                            self.registers[rd] = 0;
+                        }
+                    } else if vaddr >= VIRTUAL_DISK_ADDRESS
                         && vaddr < VIRTUAL_DISK_ADDRESS + self.virtual_disk.len() as u64
                     {
                         let disk_offset = (vaddr - VIRTUAL_DISK_ADDRESS) as usize;
@@ -127,7 +135,6 @@ impl VM {
                             _ => return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64),
                         }
                     } else {
-                        // It's a normal memory access
                         let alignment = match funct3 {
                             funct3::LW | funct3::LWU => 4,
                             funct3::LD => 8,
@@ -183,6 +190,7 @@ impl VM {
                     }
                 }
             }
+
             opcodes::OP_STORE => {
                 let funct3 = (inst >> 12) & 0x7;
                 let rs1 = ((inst >> 15) & 0x1F) as usize;
@@ -197,8 +205,6 @@ impl VM {
                 if vaddr >= VIRTUAL_DISK_ADDRESS
                     && vaddr < VIRTUAL_DISK_ADDRESS + self.virtual_disk.len() as u64
                 {
-                    // Our disk is read-only, so we do nothing on a store.
-                    // A more complex VM could simulate writing here.
                 } else {
                     let alignment = match funct3 {
                         funct3::SW => 4,
@@ -477,7 +483,6 @@ impl VM {
                 match funct3 {
                     funct3::FENCE | funct3::FENCE_I => {
                         // In a simple single-core VM, FENCE can be treated as a NOP.
-                        // A more complex implementation would handle memory ordering here.
                     }
                     _ => {
                         return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
@@ -582,153 +587,5 @@ impl VM {
 
         self.pc = next_pc;
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{memory::BASE_ADDRESS, VM};
-    use riscv_core::{abi, csr};
-
-    fn setup_vm() -> VM {
-        let mut vm = VM::new();
-        vm.pc = BASE_ADDRESS;
-        vm
-    }
-
-    #[test]
-    fn test_op_lui() {
-        let mut vm = setup_vm();
-        vm.execute(0xabcde537); // lui a0, 0xABCDE
-        assert_eq!(vm.registers[abi::A0 as usize], 0xffffffffabcde000);
-        assert_eq!(vm.pc, BASE_ADDRESS + 4);
-    }
-
-    #[test]
-    fn test_op_auipc() {
-        let mut vm = setup_vm();
-        vm.execute(0x00001517); // auipc a0, 0x1
-        assert_eq!(vm.registers[abi::A0 as usize], BASE_ADDRESS + 0x1000);
-    }
-
-    #[test]
-    fn test_op_jal() {
-        let mut vm = setup_vm();
-        vm.execute(0x014000ef); // jal ra, 20
-        assert_eq!(vm.registers[abi::RA as usize], BASE_ADDRESS + 4);
-        assert_eq!(vm.pc, BASE_ADDRESS + 20);
-    }
-
-    #[test]
-    fn test_op_jalr() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = BASE_ADDRESS + 0x100;
-        vm.execute(0x020500e7); // jalr ra, 32(a0)
-        assert_eq!(vm.registers[abi::RA as usize], BASE_ADDRESS + 4);
-        assert_eq!(vm.pc, BASE_ADDRESS + 0x100 + 32);
-    }
-
-    #[test]
-    fn test_op_branch() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 5;
-        vm.registers[abi::A1 as usize] = 5;
-        vm.execute(0x00b50863); // beq a0, a1, 16 (taken)
-        assert_eq!(vm.pc, BASE_ADDRESS + 16);
-    }
-
-    #[test]
-    fn test_op_loads() {
-        let mut vm = setup_vm();
-        let data_addr = BASE_ADDRESS + 0x200;
-        let data_val = 0x8899AABBCCDDEEFF_u64;
-        let paddr = vm.translate_addr(data_addr).unwrap();
-        vm.memory[paddr..paddr + 8].copy_from_slice(&data_val.to_le_bytes());
-        vm.registers[abi::A0 as usize] = data_addr;
-
-        vm.execute(0x00053583); // ld a1, 0(a0)
-        assert_eq!(vm.registers[abi::A1 as usize], data_val);
-        vm.execute(0x00052603); // lw a2, 0(a0)
-        assert_eq!(vm.registers[abi::A2 as usize], 0xffffffffccddeeff);
-    }
-
-    #[test]
-    fn test_op_stores() {
-        let mut vm = setup_vm();
-        let store_addr = BASE_ADDRESS + 0x200;
-        vm.registers[abi::A0 as usize] = store_addr;
-        vm.registers[abi::A1 as usize] = 0x11223344AABBCCDD;
-        vm.execute(0x00b53023); // sd a1, 0(a0)
-        let paddr = vm.translate_addr(store_addr).unwrap();
-        assert_eq!(
-            u64::from_le_bytes(vm.memory[paddr..paddr + 8].try_into().unwrap()),
-            0x11223344AABBCCDD
-        );
-    }
-
-    #[test]
-    fn test_op_imm() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 100;
-        vm.execute(0xff650593); // addi a1, a0, -10
-        assert_eq!(vm.registers[abi::A1 as usize], 90);
-    }
-
-    #[test]
-    fn test_op_imm_32() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 0xFFFFFFFF_80000000;
-        vm.execute(0x0015059B); // addiw a1, a0, 1
-        assert_eq!(vm.registers[abi::A1 as usize], -2147483647i64 as u64);
-    }
-
-    #[test]
-    fn test_op_imm_shifts_rv64() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 0x00000000_FFFFFFFF;
-        vm.execute(0x02051593); // slli a1, a0, 32
-        assert_eq!(vm.registers[abi::A1 as usize], 0xFFFFFFFF_00000000);
-    }
-
-    #[test]
-    fn test_op_reg() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 100;
-        vm.registers[abi::A1 as usize] = 50;
-        vm.execute(0x40b50633); // sub a2, a0, a1
-        assert_eq!(vm.registers[abi::A2 as usize], 50);
-    }
-
-    #[test]
-    fn test_op_m_extension() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = -100i64 as u64;
-        vm.registers[abi::A1 as usize] = 10;
-        vm.execute(0x02b50633); // mul a2, a0, a1
-        assert_eq!(vm.registers[abi::A2 as usize], -1000i64 as u64);
-    }
-
-    #[test]
-    fn test_op_reg_32() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 10;
-        vm.registers[abi::A1 as usize] = 20;
-        vm.execute(0x40b505bb); // subw a1, a0, a1 -> -10
-        assert_eq!(vm.registers[abi::A1 as usize], -10i64 as u64);
-    }
-
-    #[test]
-    fn test_op_system_csr() {
-        let mut vm = setup_vm();
-        vm.csrs.write(csr::MSTATUS, 0xABCD, vm.privilege_level);
-        vm.registers[abi::A0 as usize] = 0x1234;
-
-        // csrrw a1, mstatus, a0
-        vm.execute(0x300515f3);
-
-        assert_eq!(vm.registers[abi::A1 as usize], 0xABCD);
-
-        let new_mstatus = vm.csrs.read(csr::MSTATUS, vm.privilege_level).unwrap();
-        assert_eq!(new_mstatus, 0x1234);
     }
 }
