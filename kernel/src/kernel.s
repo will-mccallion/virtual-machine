@@ -10,4 +10,5 @@ _start:
     # For now, we just prove we got here by entering an infinite loop.
 os_loop:
     ebreak
+    addi t0, t0, 1
     j os_loop
