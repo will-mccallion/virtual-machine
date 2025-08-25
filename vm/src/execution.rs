@@ -1,8 +1,13 @@
+use std::io::{self, Write};
+
 use crate::{
     memory::{VIRTUAL_DISK_ADDRESS, VIRTUAL_DISK_SIZE_ADDRESS},
     VM,
 };
 use riscv_core::{cause, csr, funct3, funct7, opcodes, system};
+
+const UART_BASE_ADDRESS: u64 = 0x10000000;
+const UART_SIZE: u64 = 8;
 
 impl VM {
     pub(crate) fn execute(&mut self, inst: u32) -> bool {
@@ -202,9 +207,15 @@ impl VM {
                 let vaddr = self.registers[rs1].wrapping_add(imm as i64 as u64);
                 let data = self.registers[rs2];
 
-                if vaddr >= VIRTUAL_DISK_ADDRESS
+                if vaddr >= UART_BASE_ADDRESS && vaddr < UART_BASE_ADDRESS + UART_SIZE {
+                    if funct3 == funct3::SB {
+                        print!("{}", data as u8 as char);
+                        io::stdout().flush().unwrap();
+                    }
+                } else if vaddr >= VIRTUAL_DISK_ADDRESS
                     && vaddr < VIRTUAL_DISK_ADDRESS + self.virtual_disk.len() as u64
                 {
+                    // Do nothing
                 } else {
                     let alignment = match funct3 {
                         funct3::SW => 4,

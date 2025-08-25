@@ -6,11 +6,21 @@ use std::io::{self, Write};
 impl VM {
     pub(crate) fn handle_trap(&mut self, cause: u64, tval: u64) -> bool {
         let is_interrupt = (cause >> 63) & 1 == 1;
-
         let return_pc = if is_interrupt { self.pc } else { self.pc + 4 };
-        self.csrs.write(csr::MEPC, return_pc, self.privilege_level);
-        self.csrs.write(csr::MCAUSE, cause, self.privilege_level);
-        self.csrs.write(csr::MTVAL, tval, self.privilege_level);
+
+        match self.privilege_level {
+            1 | 0 => {
+                self.csrs.write(csr::SEPC, return_pc, self.privilege_level);
+                self.csrs.write(csr::SCAUSE, cause, self.privilege_level);
+                self.csrs.write(csr::STVAL, tval, self.privilege_level);
+            }
+            3 => {
+                self.csrs.write(csr::MEPC, return_pc, self.privilege_level);
+                self.csrs.write(csr::MCAUSE, cause, self.privilege_level);
+                self.csrs.write(csr::MTVAL, tval, self.privilege_level);
+            }
+            _ => unreachable!(),
+        }
 
         if is_interrupt {
             self.handle_interrupt(cause)
@@ -26,8 +36,9 @@ impl VM {
                 match syscall_num {
                     93 => {
                         let exit_code = self.registers[abi::A0 as usize];
-                        println!("\n--- ECALL: Exit with code {} ---", exit_code as i32);
+                        println!("\n\n--- ECALL: Exit with code {} --- \n", exit_code as i32);
                         self.print_state();
+                        println!("");
                         return false;
                     }
                     _ => {

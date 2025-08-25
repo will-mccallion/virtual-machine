@@ -1,17 +1,13 @@
-// in vm/mmu.rs (Final, Corrected Version)
-
 use crate::{
     csr::{SATP_MODE_SV39, SATP_PPN_MASK},
     VM,
 };
 use riscv_core::csr;
 
-// Sv39 page table constants
 const PAGE_SIZE: u64 = 4096;
 const PTE_SIZE: u64 = 8;
 const LEVELS: u64 = 3;
 
-// Page Table Entry flags
 const PTE_VALID: u64 = 1 << 0;
 const PTE_READ: u64 = 1 << 1;
 const PTE_WRITE: u64 = 1 << 2;
@@ -19,7 +15,6 @@ const PTE_EXECUTE: u64 = 1 << 3;
 //const PTE_USER: u64 = 1 << 4;
 
 impl VM {
-    /// Translates a virtual address to a physical address, handling page faults.
     pub fn translate(&mut self, vaddr: u64, is_write: bool, is_execute: bool) -> Result<u64, u64> {
         let satp = self.csrs.read(csr::SATP, self.privilege_level).unwrap_or(0);
         let mode = satp >> 60;
@@ -74,7 +69,6 @@ impl VM {
                     return Err(vaddr);
                 }
 
-                // --- THIS IS THE CORRECTED LOGIC ---
                 let paddr = match level {
                     // Level 2 -> 1GB Gigapage.
                     // Physical Address = [PTE PPN[2] | vaddr[29:0]]
@@ -104,7 +98,6 @@ impl VM {
                     self.tlb.insert(vpn, paddr - (vaddr % PAGE_SIZE));
                 }
 
-                // The final physical address must be translated back to a memory vector offset.
                 if paddr < super::memory::BASE_ADDRESS {
                     return Err(paddr);
                 }

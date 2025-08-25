@@ -63,8 +63,10 @@ impl VM {
                 None => {
                     let cause = self
                         .csrs
-                        .read(riscv_core::csr::MCAUSE, self.privilege_level)
+                        .read(riscv_core::csr::SCAUSE, 3)
+                        .or_else(|| self.csrs.read(riscv_core::csr::MCAUSE, 3))
                         .unwrap_or(0);
+
                     if self.is_exit_ecall(cause) {
                         return Ok(());
                     } else {
@@ -84,8 +86,10 @@ impl VM {
             if !self.execute(instruction) {
                 let cause = self
                     .csrs
-                    .read(riscv_core::csr::MCAUSE, self.privilege_level)
+                    .read(riscv_core::csr::SCAUSE, 3)
+                    .or_else(|| self.csrs.read(riscv_core::csr::MCAUSE, 3))
                     .unwrap_or(0);
+
                 if self.is_exit_ecall(cause) {
                     return Ok(());
                 } else {
@@ -101,7 +105,10 @@ impl VM {
     }
 
     fn is_exit_ecall(&self, cause: u64) -> bool {
-        if cause == riscv_core::cause::ECALL_FROM_M_MODE {
+        if (cause == riscv_core::cause::ECALL_FROM_M_MODE)
+            | (cause == riscv_core::cause::ECALL_FROM_S_MODE)
+            | (cause == riscv_core::cause::ECALL_FROM_U_MODE)
+        {
             if self.registers[riscv_core::abi::A7 as usize] == 93 {
                 return true;
             }
@@ -136,20 +143,9 @@ impl VM {
             "t3", "t4", "t5", "t6",
         ];
         println!();
-        println!("---------------------------------");
-        println!("\n--- VM State ---");
-        println!("---------------------------------");
-        println!("PC: {:#018x}", self.pc);
-        println!("Privilege Level: {}", self.privilege_level_to_string());
         let gpr_header = format!("{:<5} {:<7} {:<18}", "Reg", "ABI", "Value");
         let csr_header = format!("{:<8} {:<10} {:<18}", "Address", "Name", "Value");
         let seperator = " | ";
-        println!(
-            "{} {} {}",
-            " --- General Purpose Registers --- ",
-            seperator,
-            " --- Control & Status Registers --- "
-        );
         println!("------------------------------------------------------------------");
         println!("{}{}{}", gpr_header, seperator, csr_header);
         println!("------------------------------------------------------------------");
@@ -170,7 +166,9 @@ impl VM {
                 println!("{}{}", gpr_line, seperator);
             }
         }
-        println!("---------------------------------");
+        println!();
+        println!("PC: {:#018x}", self.pc);
+        println!("Privilege Level: {}", self.privilege_level_to_string());
     }
 
     fn privilege_level_to_string(&self) -> &str {

@@ -33,6 +33,7 @@ fn main() {
     vm.load_virtual_disk(KERNEL_BYTES.to_vec());
 
     println!("VM: Starting execution at reset vector...");
+    println!("");
     if let Err(e) = vm.run() {
         eprintln!("\n--- VM Runtime Error ---");
         eprintln!("{}", e);
