@@ -1,12 +1,14 @@
 pub mod csr;
 pub mod execution;
 pub mod memory;
+pub mod mmu;
 pub mod trap;
 
 use crate::csr::CsrFile;
 use crate::memory::{BASE_ADDRESS, MEMORY_SIZE};
 use assembler::disassemble;
 use riscv_core::csr as rv_csrs;
+use std::collections::HashMap;
 
 #[derive(Default)]
 pub struct VmConfig {
@@ -21,6 +23,7 @@ pub struct VM {
     pub privilege_level: u8,
     pub config: VmConfig,
     pub virtual_disk: Vec<u8>,
+    pub tlb: HashMap<u64, u64>,
 }
 
 impl VM {
@@ -33,6 +36,7 @@ impl VM {
             privilege_level: 3,
             config,
             virtual_disk: Vec::new(),
+            tlb: HashMap::new(),
         }
     }
 

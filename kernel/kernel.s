@@ -9,4 +9,5 @@ _start:
     # In a real OS, you would now initialize drivers, filesystems, etc.
     # For now, we just prove we got here by entering an infinite loop.
 os_loop:
+    ebreak
     j os_loop

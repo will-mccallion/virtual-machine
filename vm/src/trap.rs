@@ -43,7 +43,6 @@ impl VM {
                 let disassembled_text = disassemble(instruction_word, self.pc);
                 println!("Failing Instruction: '{}'", disassembled_text);
                 println!("Instruction Word (mtval): {:#010x}", instruction_word);
-                self.print_state();
                 return false;
             }
 
@@ -51,7 +50,6 @@ impl VM {
                 println!("\n--- FATAL EXCEPTION: Instruction Address Misaligned ---");
                 println!("PC (mepc): {:#x}", self.pc);
                 println!("Misaligned Address (mtval): {:#x}", tval);
-                self.print_state();
                 return false;
             }
 
@@ -66,7 +64,6 @@ impl VM {
                 );
                 println!("Faulting Address (mtval): {:#x}", tval);
                 println!("Instruction PC (mepc): {:#x}", self.pc);
-                self.print_state();
                 return false;
             }
 
@@ -79,7 +76,6 @@ impl VM {
                 );
                 println!("Misaligned Address (mtval): {:#x}", tval);
                 println!("Instruction PC (mepc): {:#x}", self.pc);
-                self.print_state();
                 return false;
             }
 
@@ -108,7 +104,6 @@ impl VM {
                 );
                 println!("Faulting Virtual Address (mtval): {:#x}", tval);
                 println!("Instruction PC (mepc): {:#x}", self.pc);
-                self.print_state();
                 return false;
             }
 
@@ -120,7 +115,6 @@ impl VM {
                     self.cause_to_string(exception_code)
                 );
                 println!("Trap Value (mtval): {:#x}", tval);
-                self.print_state();
                 return false;
             }
         }

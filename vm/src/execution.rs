@@ -146,8 +146,8 @@ impl VM {
                             return self.handle_trap(cause::LOAD_ADDRESS_MISALIGNED, vaddr);
                         }
 
-                        let paddr = match self.translate_addr(vaddr) {
-                            Ok(addr) => addr,
+                        let paddr = match self.translate(vaddr, false, false) {
+                            Ok(addr) => addr as usize,
                             Err(fault_addr) => {
                                 return self.handle_trap(cause::LOAD_ACCESS_FAULT, fault_addr);
                             }
@@ -217,8 +217,8 @@ impl VM {
                         return self.handle_trap(cause::STORE_AMO_ADDRESS_MISALIGNED, vaddr);
                     }
 
-                    let paddr = match self.translate_addr(vaddr) {
-                        Ok(addr) => addr,
+                    let paddr = match self.translate(vaddr, true, false) {
+                        Ok(addr) => addr as usize,
                         Err(fault_addr) => {
                             return self.handle_trap(cause::STORE_AMO_ACCESS_FAULT, fault_addr);
                         }
