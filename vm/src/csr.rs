@@ -22,6 +22,14 @@ pub struct CsrFile {
 
 impl CsrFile {
     pub fn new() -> Self {
+        let mut other_csrs = HashMap::new();
+
+        other_csrs.insert(csr::MEDELEG, 0);
+        other_csrs.insert(csr::MIDELEG, 0);
+
+        other_csrs.insert(csr::SEDELEG, 0);
+        other_csrs.insert(csr::SIDELEG, 0);
+
         Self {
             mstatus: 0,
             mie: 0,
@@ -32,7 +40,7 @@ impl CsrFile {
             mscratch: 0,
             mtvec: 0,
             satp: 0,
-            other_csrs: HashMap::new(),
+            other_csrs,
         }
     }
 

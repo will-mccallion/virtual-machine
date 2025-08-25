@@ -507,14 +507,39 @@ impl VM {
                                 return self.handle_trap(cause::BREAKPOINT, 0);
                             }
                             system::FUNCT12_MRET => {
-                                let mstatus =
-                                    self.csrs.read(csr::MSTATUS, self.privilege_level).unwrap();
-                                self.privilege_level = ((mstatus >> 11) & 0b11) as u8;
+                                let current_priv = self.privilege_level;
+
+                                let mstatus = match self.csrs.read(csr::MSTATUS, current_priv) {
+                                    Some(val) => val,
+                                    None => {
+                                        return self
+                                            .handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64)
+                                    }
+                                };
+                                let mepc = match self.csrs.read(csr::MEPC, current_priv) {
+                                    Some(val) => val,
+                                    None => {
+                                        return self
+                                            .handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64)
+                                    }
+                                };
+
+                                next_pc = mepc;
+
+                                let new_priv_level = ((mstatus >> 11) & 0b11) as u8;
+
                                 let mpie = (mstatus >> 7) & 1;
-                                self.csrs.mstatus = (self.csrs.mstatus & !(1 << 3)) | (mpie << 3);
-                                self.csrs.mstatus |= 1 << 7;
-                                self.csrs.mstatus &= !(0b11 << 11);
-                                next_pc = self.csrs.read(csr::MEPC, self.privilege_level).unwrap();
+                                let mut new_mstatus = mstatus;
+                                new_mstatus = (new_mstatus & !(1 << 3)) | (mpie << 3);
+                                new_mstatus |= 1 << 7;
+                                new_mstatus &= !(0b11 << 11);
+
+                                if !self.csrs.write(csr::MSTATUS, new_mstatus, current_priv) {
+                                    return self
+                                        .handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                                }
+
+                                self.privilege_level = new_priv_level;
                             }
                             system::FUNCT12_SRET => {
                                 let sstatus =

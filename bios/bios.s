@@ -1,7 +1,7 @@
-# bios.s (Complete and Correct Version)
+# bios.s (Final Version for Limited Toolchains)
 
 .section .data
-# --- 64-bit Constants (Originals, all required) ---
+# --- 64-bit Constants for Boot Process ---
 STACK_POINTER_ADDR:   .quad 0x88000000
 ROOT_PAGE_TABLE:      .quad 0x80010000
 PAGE_TABLE_CLEAR_SIZE:.quad 8192
@@ -10,17 +10,19 @@ SATP_MODE_SV39_VALUE: .quad 0x8000000000000000
 VIRTUAL_DISK_ADDR:    .quad 0x90000000
 KERNEL_LOAD_ADDR:     .quad 0x80100000
 DISK_SIZE_REG_ADDR:   .quad 0x90001000
-
-# --- NEW CONSTANT FOR THE FIX ---
-# The final, pre-calculated, correct PTE value for the 1GB gigapage.
-# PPN = (0x80000000 >> 30) = 2.
-# PTE = (PPN << 28) | Valid(1) | Read(2) | Write(4) | Execute(8)
-# PTE = (2 << 28) | 15 = 0x20000000 | 0xF = 0x2000000F
 CORRECT_PTE_VALUE:    .quad 0x2000000F
 
-# --- CONSTANTS FOR DEBUGGING ---
-DEBUG_MAGIC_ADDR:     .quad 0x80001000
-DEBUG_MAGIC_VALUE:    .quad 0xDEADBEEF
+# --- Constants for Privilege Drop (avoids large `li` and `~`) ---
+# A mask of all 1s, used to delegate all exceptions and interrupts.
+DELEGATION_MASK:      .quad -1
+
+# A mask for the mstatus.MPP bits (bits 11 and 12).
+# Used with `csrrc` to clear the previous privilege level setting.
+MSTATUS_MPP_MASK:     .quad 0x1800
+
+# The value to set mstatus.MPP to for Supervisor Mode (0b01 << 11).
+# Used with `csrrs` to set the new privilege level.
+MSTATUS_MPP_S_MODE:   .quad 0x800
 
 .section .text
 .global _start
@@ -47,11 +49,12 @@ clear_loop:
     # 3. Create the identity map for the first 1GB of memory.
     la t0, ROOT_PAGE_TABLE
     ld t0, 0(t0)
-    addi t0, t0, 16 # Go to entry index 2 for VA 0x80000000
+    addi t0, t0, 16
 
+    # Load the pre-calculated correct PTE and store it.
     la t1, CORRECT_PTE_VALUE
-    ld t1, 0(t1)         # t1 now holds the correct value: 0x2000000F
-    sd t1, 0(t0)         # Store this correct PTE into the page table.
+    ld t1, 0(t1)
+    sd t1, 0(t0)
 
     # 4. Enable Paging!
     la t0, SATP_PPN_VALUE
@@ -63,18 +66,15 @@ clear_loop:
 
     # --- Stage 2: Running in Virtual Memory (MMU is ON) ---
 
-    # 5. Load and jump to the kernel.
+    # 5. Load the kernel from the virtual disk.
     la t1, DISK_SIZE_REG_ADDR
     ld t1, 0(t1)
     ld a2, 0(t1)
-
     la a0, VIRTUAL_DISK_ADDR
     ld a0, 0(a0)
-
     la a1, KERNEL_LOAD_ADDR
     ld a1, 0(a1)
-
-    beq a2, zero, jump_to_kernel
+    beq a2, zero, prepare_s_mode
 
 load_loop:
     lb t0, 0(a0)
@@ -84,10 +84,40 @@ load_loop:
     addi a2, a2, -1
     bne a2, zero, load_loop
 
-jump_to_kernel:
+prepare_s_mode:
+    # --- Stage 3: Prepare Handoff to Supervisor-Mode Kernel ---
+
+    # 6. Delegate all exceptions and interrupts to S-mode.
+    la t0, DELEGATION_MASK
+    ld t0, 0(t0)
+    # Use `csrrw` to write the value from t0 into the CSR.
+    # `csrrw rd, csr, rs1` writes rs1 to csr, and reads the old value into rd.
+    # Using `zero` for rd means we discard the old value.
+    csrrw zero, medeleg, t0
+    csrrw zero, mideleg, t0
+
+    # 7. Set mstatus.MPP to Supervisor Mode (0b01).
+    # This is a two-step process using base instructions.
+    # First, clear the MPP bits using the mask and `csrrc`.
+    la t1, MSTATUS_MPP_MASK
+    ld t1, 0(t1)         # t1 = 0x1800
+    # `csrrc zero, csr, rs1` clears bits in csr specified by rs1.
+    csrrc zero, mstatus, t1
+
+    # Second, set the MPP bits to S-mode using the value and `csrrs`.
+    la t2, MSTATUS_MPP_S_MODE
+    ld t2, 0(t2)         # t2 = 0x800
+    # `csrrs zero, csr, rs1` sets bits in csr specified by rs1.
+    csrrs zero, mstatus, t2
+
+    # 8. Set mepc to the kernel's entry point.
     la t0, KERNEL_LOAD_ADDR
     ld t0, 0(t0)
-    jalr zero, 0(t0)
+    csrrw zero, mepc, t0
+
+    # 9. Drop privilege and jump to the kernel.
+    mret
 
 hang:
+    # This should never be reached.
     jal zero, hang
