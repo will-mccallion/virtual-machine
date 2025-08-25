@@ -6,8 +6,7 @@ pub mod trap;
 use crate::csr::CsrFile;
 use crate::memory::{BASE_ADDRESS, MEMORY_SIZE};
 use assembler::disassemble;
-use riscv_core::Executable;
-use riscv_core::{abi, csr as rv_csrs};
+use riscv_core::csr as rv_csrs;
 
 #[derive(Default)]
 pub struct VmConfig {
@@ -21,50 +20,32 @@ pub struct VM {
     pub csrs: CsrFile,
     pub privilege_level: u8,
     pub config: VmConfig,
+    pub virtual_disk: Vec<u8>,
 }
 
 impl VM {
     pub fn new_config(config: VmConfig) -> Self {
-        let mut vm = Self {
+        Self {
             registers: [0; 32],
             pc: BASE_ADDRESS,
             memory: vec![0; MEMORY_SIZE],
             csrs: CsrFile::new(),
             privilege_level: 3,
             config,
-        };
-
-        vm.registers[abi::SP as usize] = BASE_ADDRESS + MEMORY_SIZE as u64;
-        vm
+            virtual_disk: Vec::new(),
+        }
     }
 
     pub fn new() -> Self {
         VM::new_config(VmConfig::default())
     }
 
-    pub fn load_executable(&mut self, executable: &Executable) -> Result<(), String> {
-        let text_size = executable.text.len();
-        let data_size = executable.data.len();
-        let bss_size = executable.bss_size as usize;
+    pub fn load_bios(&mut self, bios_bytes: &[u8]) {
+        self.memory[0..bios_bytes.len()].copy_from_slice(bios_bytes);
+    }
 
-        let mut data_end_offset = text_size + data_size;
-        while data_end_offset % 8 != 0 {
-            data_end_offset += 1;
-        }
-        let bss_start = data_end_offset;
-
-        if bss_start + bss_size > self.memory.len() {
-            return Err(format!(
-                "Executable is too large for VM memory: .text={}, .data={}, .bss={}",
-                text_size, data_size, bss_size
-            ));
-        }
-
-        self.memory[0..text_size].copy_from_slice(&executable.text);
-        self.memory[text_size..text_size + data_size].copy_from_slice(&executable.data);
-
-        self.pc = executable.entry_point;
-        Ok(())
+    pub fn load_virtual_disk(&mut self, disk_bytes: Vec<u8>) {
+        self.virtual_disk = disk_bytes;
     }
 
     pub fn run(&mut self) -> Result<(), String> {

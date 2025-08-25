@@ -1,4 +1,4 @@
-use crate::VM;
+use crate::{memory::VIRTUAL_DISK_ADDRESS, VM};
 use riscv_core::{cause, csr, funct3, funct7, opcodes, system};
 
 impl VM {
@@ -78,49 +78,107 @@ impl VM {
                     let imm = (inst as i32 >> 20) as i64 as u64;
                     let vaddr = self.registers[rs1].wrapping_add(imm);
 
-                    let alignment = match funct3 {
-                        funct3::LW | funct3::LWU => 4,
-                        funct3::LD => 8,
-                        funct3::LH | funct3::LHU => 2,
-                        _ => 1,
-                    };
+                    if vaddr >= VIRTUAL_DISK_ADDRESS
+                        && vaddr < VIRTUAL_DISK_ADDRESS + self.virtual_disk.len() as u64
+                    {
+                        let disk_offset = (vaddr - VIRTUAL_DISK_ADDRESS) as usize;
+                        match funct3 {
+                            funct3::LB => {
+                                self.registers[rd] = self.virtual_disk[disk_offset] as i8 as u64
+                            }
+                            funct3::LH => {
+                                let bytes: [u8; 2] = self.virtual_disk
+                                    [disk_offset..disk_offset + 2]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = i16::from_le_bytes(bytes) as i64 as u64;
+                            }
+                            funct3::LW => {
+                                let bytes: [u8; 4] = self.virtual_disk
+                                    [disk_offset..disk_offset + 4]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
+                            }
+                            funct3::LD => {
+                                let bytes: [u8; 8] = self.virtual_disk
+                                    [disk_offset..disk_offset + 8]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = u64::from_le_bytes(bytes);
+                            }
+                            funct3::LBU => {
+                                self.registers[rd] = self.virtual_disk[disk_offset] as u64
+                            }
+                            funct3::LHU => {
+                                let bytes: [u8; 2] = self.virtual_disk
+                                    [disk_offset..disk_offset + 2]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = u16::from_le_bytes(bytes) as u64;
+                            }
+                            funct3::LWU => {
+                                let bytes: [u8; 4] = self.virtual_disk
+                                    [disk_offset..disk_offset + 4]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = u32::from_le_bytes(bytes) as u64;
+                            }
+                            _ => return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64),
+                        }
+                    } else {
+                        // It's a normal memory access
+                        let alignment = match funct3 {
+                            funct3::LW | funct3::LWU => 4,
+                            funct3::LD => 8,
+                            funct3::LH | funct3::LHU => 2,
+                            _ => 1,
+                        };
 
-                    if alignment > 1 && vaddr % alignment != 0 {
-                        return self.handle_trap(cause::LOAD_ADDRESS_MISALIGNED, vaddr);
-                    }
+                        if alignment > 1 && vaddr % alignment != 0 {
+                            return self.handle_trap(cause::LOAD_ADDRESS_MISALIGNED, vaddr);
+                        }
 
-                    let paddr = match self.translate_addr(vaddr) {
-                        Ok(addr) => addr,
-                        Err(fault_addr) => {
-                            return self.handle_trap(cause::LOAD_ACCESS_FAULT, fault_addr);
-                        }
-                    };
+                        let paddr = match self.translate_addr(vaddr) {
+                            Ok(addr) => addr,
+                            Err(fault_addr) => {
+                                return self.handle_trap(cause::LOAD_ACCESS_FAULT, fault_addr);
+                            }
+                        };
 
-                    match funct3 {
-                        funct3::LB => self.registers[rd] = self.memory[paddr] as i8 as i64 as u64,
-                        funct3::LH => {
-                            let bytes: [u8; 2] = self.memory[paddr..paddr + 2].try_into().unwrap();
-                            self.registers[rd] = i16::from_le_bytes(bytes) as i64 as u64;
-                        }
-                        funct3::LW => {
-                            let bytes: [u8; 4] = self.memory[paddr..paddr + 4].try_into().unwrap();
-                            self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
-                        }
-                        funct3::LD => {
-                            let bytes: [u8; 8] = self.memory[paddr..paddr + 8].try_into().unwrap();
-                            self.registers[rd] = u64::from_le_bytes(bytes);
-                        }
-                        funct3::LBU => self.registers[rd] = self.memory[paddr] as u64,
-                        funct3::LHU => {
-                            let bytes: [u8; 2] = self.memory[paddr..paddr + 2].try_into().unwrap();
-                            self.registers[rd] = u16::from_le_bytes(bytes) as u64;
-                        }
-                        funct3::LWU => {
-                            let bytes: [u8; 4] = self.memory[paddr..paddr + 4].try_into().unwrap();
-                            self.registers[rd] = u32::from_le_bytes(bytes) as u64;
-                        }
-                        _ => {
-                            return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                        match funct3 {
+                            funct3::LB => {
+                                self.registers[rd] = self.memory[paddr] as i8 as i64 as u64
+                            }
+                            funct3::LH => {
+                                let bytes: [u8; 2] =
+                                    self.memory[paddr..paddr + 2].try_into().unwrap();
+                                self.registers[rd] = i16::from_le_bytes(bytes) as i64 as u64;
+                            }
+                            funct3::LW => {
+                                let bytes: [u8; 4] =
+                                    self.memory[paddr..paddr + 4].try_into().unwrap();
+                                self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
+                            }
+                            funct3::LD => {
+                                let bytes: [u8; 8] =
+                                    self.memory[paddr..paddr + 8].try_into().unwrap();
+                                self.registers[rd] = u64::from_le_bytes(bytes);
+                            }
+                            funct3::LBU => self.registers[rd] = self.memory[paddr] as u64,
+                            funct3::LHU => {
+                                let bytes: [u8; 2] =
+                                    self.memory[paddr..paddr + 2].try_into().unwrap();
+                                self.registers[rd] = u16::from_le_bytes(bytes) as u64;
+                            }
+                            funct3::LWU => {
+                                let bytes: [u8; 4] =
+                                    self.memory[paddr..paddr + 4].try_into().unwrap();
+                                self.registers[rd] = u32::from_le_bytes(bytes) as u64;
+                            }
+                            _ => {
+                                return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                            }
                         }
                     }
                 }
@@ -136,37 +194,42 @@ impl VM {
                 let vaddr = self.registers[rs1].wrapping_add(imm as i64 as u64);
                 let data = self.registers[rs2];
 
-                let alignment = match funct3 {
-                    funct3::SW => 4,
-                    funct3::SD => 8,
-                    funct3::SH => 2,
-                    _ => 1,
-                };
+                if vaddr >= VIRTUAL_DISK_ADDRESS
+                    && vaddr < VIRTUAL_DISK_ADDRESS + self.virtual_disk.len() as u64
+                {
+                    // Our disk is read-only, so we do nothing on a store.
+                    // A more complex VM could simulate writing here.
+                } else {
+                    let alignment = match funct3 {
+                        funct3::SW => 4,
+                        funct3::SD => 8,
+                        funct3::SH => 2,
+                        _ => 1,
+                    };
 
-                if alignment > 1 && vaddr % alignment != 0 {
-                    return self.handle_trap(cause::STORE_AMO_ADDRESS_MISALIGNED, vaddr);
-                }
+                    if alignment > 1 && vaddr % alignment != 0 {
+                        return self.handle_trap(cause::STORE_AMO_ADDRESS_MISALIGNED, vaddr);
+                    }
 
-                let paddr = match self.translate_addr(vaddr) {
-                    Ok(addr) => addr,
-                    Err(fault_addr) => {
-                        return self.handle_trap(cause::STORE_AMO_ACCESS_FAULT, fault_addr);
-                    }
-                };
+                    let paddr = match self.translate_addr(vaddr) {
+                        Ok(addr) => addr,
+                        Err(fault_addr) => {
+                            return self.handle_trap(cause::STORE_AMO_ACCESS_FAULT, fault_addr);
+                        }
+                    };
 
-                match funct3 {
-                    funct3::SB => self.memory[paddr] = data as u8,
-                    funct3::SH => {
-                        self.memory[paddr..paddr + 2].copy_from_slice(&(data as u16).to_le_bytes())
-                    }
-                    funct3::SW => {
-                        self.memory[paddr..paddr + 4].copy_from_slice(&(data as u32).to_le_bytes())
-                    }
-                    funct3::SD => {
-                        self.memory[paddr..paddr + 8].copy_from_slice(&data.to_le_bytes())
-                    }
-                    _ => {
-                        return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                    match funct3 {
+                        funct3::SB => self.memory[paddr] = data as u8,
+                        funct3::SH => self.memory[paddr..paddr + 2]
+                            .copy_from_slice(&(data as u16).to_le_bytes()),
+                        funct3::SW => self.memory[paddr..paddr + 4]
+                            .copy_from_slice(&(data as u32).to_le_bytes()),
+                        funct3::SD => {
+                            self.memory[paddr..paddr + 8].copy_from_slice(&data.to_le_bytes())
+                        }
+                        _ => {
+                            return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                        }
                     }
                 }
             }
