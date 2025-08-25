@@ -49,6 +49,7 @@ main:
 # Note: fib(0)=0, fib(1)=1, fib(2)=1, fib(3)=2, ...
 # =============================================================================
 fib:
+    ebreak
     addi sp, sp, -24        # Make room on stack for 3 registers
 
     sd s0, 0(sp)            # Store saved register s0 (our n)
