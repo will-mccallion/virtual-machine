@@ -2,20 +2,38 @@ use bincode;
 use riscv_core::{Executable, SimpleElfHeader};
 use std::env;
 use std::fs;
-use vm::VM;
+use vm::{VmConfig, VM};
 
 const MAGIC_NUMBER: [u8; 4] = *b"RBF\n";
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <input.o>", args[0]);
-        return;
+
+    let mut trace_enabled = false;
+    let mut file_path = None;
+
+    for arg in &args[1..] {
+        if arg == "--trace" {
+            trace_enabled = true;
+        } else {
+            if file_path.is_some() {
+                eprintln!("Error: Multiple input files provided. Only one is allowed.");
+                eprintln!("Usage: {} [--trace] <input.o>", args[0]);
+                return;
+            }
+            file_path = Some(arg.clone());
+        }
     }
 
-    let file_path = &args[1];
+    let file_path = match file_path {
+        Some(path) => path,
+        None => {
+            eprintln!("Usage: {} [--trace] <input.o>", args[0]);
+            return;
+        }
+    };
 
-    let file_bytes = match fs::read(file_path) {
+    let file_bytes = match fs::read(&file_path) {
         Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("Error: Failed to read file '{}': {}", file_path, e);
@@ -53,7 +71,10 @@ fn main() {
         entry_point: header.entry_point,
     };
 
-    let mut vm = VM::new();
+    let vm_config = VmConfig {
+        trace: trace_enabled,
+    };
+    let mut vm = VM::new_config(vm_config);
 
     if let Err(e) = vm.load_executable(&executable) {
         eprintln!("Error: Failed to load executable into VM: {}", e);

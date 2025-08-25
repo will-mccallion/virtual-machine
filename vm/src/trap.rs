@@ -1,10 +1,10 @@
 use crate::VM;
+use assembler::disassemble;
 use riscv_core::{abi, cause, csr};
 
 impl VM {
     pub(crate) fn handle_trap(&mut self, cause: u64, tval: u64) -> bool {
         self.csrs.write(csr::MEPC, self.pc, self.privilege_level);
-
         self.csrs.write(csr::MCAUSE, cause, self.privilege_level);
         self.csrs.write(csr::MTVAL, tval, self.privilege_level);
 
@@ -24,6 +24,22 @@ impl VM {
                     }
                 }
             }
+
+            cause::ILLEGAL_INSTRUCTION => {
+                println!("\n--- Unhandled Trap ---");
+                println!("Cause: {} (Illegal Instruction)", cause);
+
+                let instruction_word = tval as u32;
+                let pc = self.pc;
+                let disassembled_text = disassemble(instruction_word, pc);
+
+                println!("Failing Instruction: '{}'", disassembled_text);
+                println!("Instruction Word (mtval): {:#010x}", instruction_word);
+
+                self.print_state();
+                return false;
+            }
+
             _ => {
                 println!("\n--- Unhandled Trap ---");
                 println!("Cause: {} ({})", cause, self.cause_to_string(cause));

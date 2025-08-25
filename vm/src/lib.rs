@@ -3,11 +3,16 @@ pub mod execution;
 pub mod memory;
 pub mod trap;
 
+use crate::csr::CsrFile;
+use crate::memory::{BASE_ADDRESS, MEMORY_SIZE};
+use assembler::disassemble;
 use riscv_core::Executable;
 use riscv_core::{abi, csr as rv_csrs};
 
-use crate::csr::CsrFile;
-use crate::memory::{BASE_ADDRESS, MEMORY_SIZE};
+#[derive(Default)]
+pub struct VmConfig {
+    pub trace: bool,
+}
 
 pub struct VM {
     pub registers: [u64; 32],
@@ -15,20 +20,26 @@ pub struct VM {
     pub memory: Vec<u8>,
     pub csrs: CsrFile,
     pub privilege_level: u8,
+    pub config: VmConfig,
 }
 
 impl VM {
-    pub fn new() -> Self {
+    pub fn new_config(config: VmConfig) -> Self {
         let mut vm = Self {
             registers: [0; 32],
             pc: BASE_ADDRESS,
             memory: vec![0; MEMORY_SIZE],
             csrs: CsrFile::new(),
             privilege_level: 3,
+            config,
         };
 
         vm.registers[abi::SP as usize] = BASE_ADDRESS + MEMORY_SIZE as u64;
         vm
+    }
+
+    pub fn new() -> Self {
+        VM::new_config(VmConfig::default())
     }
 
     pub fn load_executable(&mut self, executable: &Executable) -> Result<(), String> {
@@ -60,6 +71,8 @@ impl VM {
         const INSTRUCTION_LIMIT: u64 = 5_000_000;
 
         for _ in 0..INSTRUCTION_LIMIT {
+            let pc_before_fetch = self.pc;
+
             let instruction = match self.fetch() {
                 Some(inst) => inst,
                 None => {
@@ -77,6 +90,11 @@ impl VM {
                     }
                 }
             };
+
+            if self.config.trace {
+                let disassembled_text = disassemble(instruction, pc_before_fetch);
+                eprintln!("TRACE: 0x{:016x}: {}", pc_before_fetch, disassembled_text);
+            }
 
             if !self.execute(instruction) {
                 let cause = self
