@@ -3,6 +3,9 @@ use std::collections::HashMap;
 
 // For now, this is a simplified mask. A full implementation would be more granular.
 const MSTATUS_MASK: u64 = 0x00000003_00001888;
+pub const SATP_MODE_SV39: u64 = 8 << 60;
+pub const SATP_ASID_MASK: u64 = 0xFFFF << 44;
+pub const SATP_PPN_MASK: u64 = (1u64 << 44) - 1;
 
 pub struct CsrFile {
     pub mstatus: u64,
@@ -19,6 +22,14 @@ pub struct CsrFile {
 
 impl CsrFile {
     pub fn new() -> Self {
+        let mut other_csrs = HashMap::new();
+
+        other_csrs.insert(csr::MEDELEG, 0);
+        other_csrs.insert(csr::MIDELEG, 0);
+
+        other_csrs.insert(csr::SEDELEG, 0);
+        other_csrs.insert(csr::SIDELEG, 0);
+
         Self {
             mstatus: 0,
             mie: 0,
@@ -29,7 +40,7 @@ impl CsrFile {
             mscratch: 0,
             mtvec: 0,
             satp: 0,
-            other_csrs: HashMap::new(),
+            other_csrs,
         }
     }
 

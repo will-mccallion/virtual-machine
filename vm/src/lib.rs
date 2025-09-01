@@ -1,13 +1,19 @@
 pub mod csr;
 pub mod execution;
 pub mod memory;
+pub mod mmu;
 pub mod trap;
-
-use riscv_core::Executable;
-use riscv_core::{abi, csr as rv_csrs};
 
 use crate::csr::CsrFile;
 use crate::memory::{BASE_ADDRESS, MEMORY_SIZE};
+use assembler::disassemble;
+use riscv_core::csr as rv_csrs;
+use std::collections::HashMap;
+
+#[derive(Default)]
+pub struct VmConfig {
+    pub trace: bool,
+}
 
 pub struct VM {
     pub registers: [u64; 32],
@@ -15,58 +21,52 @@ pub struct VM {
     pub memory: Vec<u8>,
     pub csrs: CsrFile,
     pub privilege_level: u8,
+    pub config: VmConfig,
+    pub virtual_disk: Vec<u8>,
+    pub tlb: HashMap<u64, u64>,
 }
 
 impl VM {
-    pub fn new() -> Self {
-        let mut vm = Self {
+    pub fn new_config(config: VmConfig) -> Self {
+        Self {
             registers: [0; 32],
             pc: BASE_ADDRESS,
             memory: vec![0; MEMORY_SIZE],
             csrs: CsrFile::new(),
             privilege_level: 3,
-        };
-
-        vm.registers[abi::SP as usize] = BASE_ADDRESS + MEMORY_SIZE as u64;
-        vm
+            config,
+            virtual_disk: Vec::new(),
+            tlb: HashMap::new(),
+        }
     }
 
-    pub fn load_executable(&mut self, executable: &Executable) -> Result<(), String> {
-        let text_size = executable.text.len();
-        let data_size = executable.data.len();
-        let bss_size = executable.bss_size as usize;
+    pub fn new() -> Self {
+        VM::new_config(VmConfig::default())
+    }
 
-        let mut data_end_offset = text_size + data_size;
-        while data_end_offset % 8 != 0 {
-            data_end_offset += 1;
-        }
-        let bss_start = data_end_offset;
+    pub fn load_bios(&mut self, bios_bytes: &[u8]) {
+        self.memory[0..bios_bytes.len()].copy_from_slice(bios_bytes);
+    }
 
-        if bss_start + bss_size > self.memory.len() {
-            return Err(format!(
-                "Executable is too large for VM memory: .text={}, .data={}, .bss={}",
-                text_size, data_size, bss_size
-            ));
-        }
-
-        self.memory[0..text_size].copy_from_slice(&executable.text);
-        self.memory[text_size..text_size + data_size].copy_from_slice(&executable.data);
-
-        self.pc = executable.entry_point;
-        Ok(())
+    pub fn load_virtual_disk(&mut self, disk_bytes: Vec<u8>) {
+        self.virtual_disk = disk_bytes;
     }
 
     pub fn run(&mut self) -> Result<(), String> {
         const INSTRUCTION_LIMIT: u64 = 5_000_000;
 
         for _ in 0..INSTRUCTION_LIMIT {
+            let pc_before_fetch = self.pc;
+
             let instruction = match self.fetch() {
                 Some(inst) => inst,
                 None => {
                     let cause = self
                         .csrs
-                        .read(riscv_core::csr::MCAUSE, self.privilege_level)
+                        .read(riscv_core::csr::SCAUSE, 3)
+                        .or_else(|| self.csrs.read(riscv_core::csr::MCAUSE, 3))
                         .unwrap_or(0);
+
                     if self.is_exit_ecall(cause) {
                         return Ok(());
                     } else {
@@ -78,11 +78,18 @@ impl VM {
                 }
             };
 
+            if self.config.trace {
+                let disassembled_text = disassemble(instruction, pc_before_fetch);
+                eprintln!("TRACE: 0x{:016x}: {}", pc_before_fetch, disassembled_text);
+            }
+
             if !self.execute(instruction) {
                 let cause = self
                     .csrs
-                    .read(riscv_core::csr::MCAUSE, self.privilege_level)
+                    .read(riscv_core::csr::SCAUSE, 3)
+                    .or_else(|| self.csrs.read(riscv_core::csr::MCAUSE, 3))
                     .unwrap_or(0);
+
                 if self.is_exit_ecall(cause) {
                     return Ok(());
                 } else {
@@ -98,7 +105,10 @@ impl VM {
     }
 
     fn is_exit_ecall(&self, cause: u64) -> bool {
-        if cause == riscv_core::cause::ECALL_FROM_M_MODE {
+        if (cause == riscv_core::cause::ECALL_FROM_M_MODE)
+            | (cause == riscv_core::cause::ECALL_FROM_S_MODE)
+            | (cause == riscv_core::cause::ECALL_FROM_U_MODE)
+        {
             if self.registers[riscv_core::abi::A7 as usize] == 93 {
                 return true;
             }
@@ -133,20 +143,9 @@ impl VM {
             "t3", "t4", "t5", "t6",
         ];
         println!();
-        println!("---------------------------------");
-        println!("\n--- VM State ---");
-        println!("---------------------------------");
-        println!("PC: {:#018x}", self.pc);
-        println!("Privilege Level: {}", self.privilege_level_to_string());
         let gpr_header = format!("{:<5} {:<7} {:<18}", "Reg", "ABI", "Value");
         let csr_header = format!("{:<8} {:<10} {:<18}", "Address", "Name", "Value");
         let seperator = " | ";
-        println!(
-            "{} {} {}",
-            " --- General Purpose Registers --- ",
-            seperator,
-            " --- Control & Status Registers --- "
-        );
         println!("------------------------------------------------------------------");
         println!("{}{}{}", gpr_header, seperator, csr_header);
         println!("------------------------------------------------------------------");
@@ -167,7 +166,9 @@ impl VM {
                 println!("{}{}", gpr_line, seperator);
             }
         }
-        println!("---------------------------------");
+        println!();
+        println!("PC: {:#018x}", self.pc);
+        println!("Privilege Level: {}", self.privilege_level_to_string());
     }
 
     fn privilege_level_to_string(&self) -> &str {

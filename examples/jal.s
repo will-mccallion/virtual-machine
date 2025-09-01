@@ -1,14 +1,16 @@
+.text
 main:
     jal ra, foo
+    li a7, 93
     ecall
 
 foo:
     addi sp, sp, -8
-    sw ra, 0(sp)
+    sd ra, 0(sp)
 
     jal ra, bar
 
-    lw ra, 0(sp)
+    ld ra, 0(sp)
     addi sp, sp, 8
 
     ret

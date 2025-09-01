@@ -12,6 +12,10 @@ fn parse_data_value(value_str: &str) -> Result<i64, std::num::ParseIntError> {
     }
 }
 
+fn align_up(value: u64, alignment: u64) -> u64 {
+    (value + alignment - 1) & !(alignment - 1)
+}
+
 pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
     let mut text_labels = HashMap::new();
     let mut data_labels = HashMap::new();
@@ -66,7 +70,17 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
                 }
                 ".section" => {
                     if tokens.len() > 1 {
-                        match tokens[1] {
+                        let new_section_name = tokens[1];
+                        if new_section_name != ".text" && current_section == Section::Text {
+                            text_segment_size = align_up(text_segment_size, 8);
+                        }
+                        if new_section_name != ".data" && current_section == Section::Data {
+                            while data_segment.len() % 8 != 0 {
+                                data_segment.push(0);
+                            }
+                        }
+
+                        match new_section_name {
                             ".text" => current_section = Section::Text,
                             ".data" => current_section = Section::Data,
                             ".bss" => current_section = Section::Bss,
@@ -74,8 +88,59 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
                         }
                     }
                 }
-                ".text" => current_section = Section::Text,
-                ".data" => current_section = Section::Data,
+                ".text" => {
+                    current_section = Section::Text;
+                }
+                ".data" => {
+                    if current_section == Section::Text {
+                        text_segment_size = align_up(text_segment_size, 8);
+                    }
+                    current_section = Section::Data;
+                }
+                ".align" => {
+                    if tokens.len() < 2 {
+                        return Err(AssemblerError {
+                            line: line_number,
+                            kind: AssemblerErrorKind::ParseError("Invalid .align".to_string()),
+                        });
+                    }
+                    let alignment = parse_data_value(tokens[1]).map_err(|_| AssemblerError {
+                        line: line_number,
+                        kind: AssemblerErrorKind::InvalidImmediateValue(tokens[1].to_string()),
+                    })?;
+                    if alignment < 0 {
+                        return Err(AssemblerError {
+                            line: line_number,
+                            kind: AssemblerErrorKind::InvalidImmediateValue(
+                                "Alignment must be non-negative".to_string(),
+                            ),
+                        });
+                    }
+                    let align_bytes = 1u64 << alignment;
+
+                    match current_section {
+                        Section::Text => {
+                            text_segment_size = align_up(text_segment_size, align_bytes);
+                            if let Some(l_name) = label {
+                                text_labels.insert(l_name.to_string(), text_segment_size);
+                            }
+                        }
+                        Section::Data => {
+                            while (data_segment.len() as u64 % align_bytes) != 0 {
+                                data_segment.push(0);
+                            }
+                            if let Some(l_name) = label {
+                                data_labels.insert(l_name.to_string(), data_segment.len() as u64);
+                            }
+                        }
+                        Section::Bss => {
+                            bss_segment_size = align_up(bss_segment_size, align_bytes);
+                            if let Some(l_name) = label {
+                                bss_labels.insert(l_name.to_string(), bss_segment_size);
+                            }
+                        }
+                    }
+                }
                 ".byte" => {
                     if let Some(l_name) = label {
                         data_labels.insert(l_name.to_string(), data_segment.len() as u64);
@@ -89,9 +154,6 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
                     }
                 }
                 ".half" => {
-                    while data_segment.len() % 2 != 0 {
-                        data_segment.push(0);
-                    }
                     if let Some(l_name) = label {
                         data_labels.insert(l_name.to_string(), data_segment.len() as u64);
                     }
@@ -104,9 +166,6 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
                     }
                 }
                 ".word" | ".dword" => {
-                    while data_segment.len() % 4 != 0 {
-                        data_segment.push(0);
-                    }
                     if let Some(l_name) = label {
                         data_labels.insert(l_name.to_string(), data_segment.len() as u64);
                     }
@@ -119,9 +178,6 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
                     }
                 }
                 ".quad" => {
-                    while data_segment.len() % 8 != 0 {
-                        data_segment.push(0);
-                    }
                     if let Some(l_name) = label {
                         data_labels.insert(l_name.to_string(), data_segment.len() as u64);
                     }
@@ -179,17 +235,18 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
         }
     }
 
-    let text_alignment = 8;
-    let aligned_text_segment_size =
-        (text_segment_size + text_alignment - 1) & !(text_alignment - 1);
-
-    let mut text_segment = Vec::new();
-    let mut current_address: u64 = 0;
-
-    let data_alignment = 8;
-    while data_segment.len() % data_alignment != 0 {
-        data_segment.push(0);
+    match current_section {
+        Section::Text => text_segment_size = align_up(text_segment_size, 8),
+        Section::Data => {
+            while data_segment.len() % 8 != 0 {
+                data_segment.push(0);
+            }
+        }
+        Section::Bss => bss_segment_size = align_up(bss_segment_size, 8),
     }
+
+    let mut text_segment = Vec::with_capacity(text_segment_size as usize);
+    let mut current_address: u64 = 0;
     let final_data_size = data_segment.len() as u64;
 
     for (i, line) in program.lines().enumerate() {
@@ -202,9 +259,36 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
             continue;
         }
         let tokens: Vec<&str> = clean_line.split_whitespace().collect();
-        if tokens.is_empty() || tokens[0].starts_with('.') {
+        if tokens.is_empty() {
             continue;
         }
+
+        let mnemonic = tokens[0].to_lowercase();
+        if mnemonic.starts_with('.') {
+            if mnemonic == ".align" {
+                if tokens.len() < 2 {
+                    return Err(AssemblerError {
+                        line: line_number,
+                        kind: AssemblerErrorKind::ParseError("Invalid .align".to_string()),
+                    });
+                }
+                let alignment = parse_data_value(tokens[1]).map_err(|_| AssemblerError {
+                    line: line_number,
+                    kind: AssemblerErrorKind::InvalidImmediateValue(tokens[1].to_string()),
+                })?;
+                if alignment >= 0 {
+                    let align_bytes = 1u64 << alignment;
+                    if align_bytes > 0 {
+                        while (current_address % align_bytes) != 0 {
+                            text_segment.extend_from_slice(&0x00000013_u32.to_le_bytes());
+                            current_address += 4;
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
         let instruction = tokens[0].to_lowercase();
         let operands = &tokens[1..];
         let encoded_insts = encode_instruction(
@@ -214,7 +298,7 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
             &text_labels,
             &data_labels,
             &bss_labels,
-            aligned_text_segment_size,
+            text_segment_size,
             final_data_size,
         )
         .map_err(|kind| AssemblerError {
@@ -227,7 +311,7 @@ pub fn parse_program(program: &str) -> Result<Executable, AssemblerError> {
         }
     }
 
-    while (text_segment.len() as u64) < aligned_text_segment_size {
+    while (text_segment.len() as u64) < text_segment_size {
         text_segment.extend_from_slice(&0x00000013_u32.to_le_bytes());
     }
 

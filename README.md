@@ -1,5 +1,7 @@
 # A RISC-V CPU and Virtual Machine
 
+To run the VM with the kernel run `cargo run -p vm --release`.
+
 ## 1. Overview
 
 This is a 64-bit virtual machine that fully implements the standard RISC-V 64-bit integer instruction set. It includes a command-line assembler that translates human-readable assembly code into machine code, and a virtual machine that executes that code according to the official RISC-V specification.

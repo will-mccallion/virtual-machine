@@ -7,3 +7,6 @@ edition = "2024"
 riscv_core = { path = "../riscv_core" }
 assembler = { path = "../assembler/" }
 bincode = "2.0.1"
+
+[build-dependencies]
+assembler = { path = "../assembler" }

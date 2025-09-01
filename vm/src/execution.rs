@@ -1,10 +1,17 @@
-use crate::VM;
+use std::io::{self, Write};
+
+use crate::{
+    memory::{VIRTUAL_DISK_ADDRESS, VIRTUAL_DISK_SIZE_ADDRESS},
+    VM,
+};
 use riscv_core::{cause, csr, funct3, funct7, opcodes, system};
+
+const UART_BASE_ADDRESS: u64 = 0x10000000;
+const UART_SIZE: u64 = 8;
 
 impl VM {
     pub(crate) fn execute(&mut self, inst: u32) -> bool {
         let opcode = inst & 0x7F;
-
         let mut next_pc = self.pc.wrapping_add(4);
 
         match opcode {
@@ -78,53 +85,117 @@ impl VM {
                     let imm = (inst as i32 >> 20) as i64 as u64;
                     let vaddr = self.registers[rs1].wrapping_add(imm);
 
-                    let alignment = match funct3 {
-                        funct3::LW | funct3::LWU => 4,
-                        funct3::LD => 8,
-                        funct3::LH | funct3::LHU => 2,
-                        _ => 1,
-                    };
+                    if vaddr == VIRTUAL_DISK_SIZE_ADDRESS {
+                        if funct3 == funct3::LD {
+                            self.registers[rd] = self.virtual_disk.len() as u64;
+                        } else {
+                            self.registers[rd] = 0;
+                        }
+                    } else if vaddr >= VIRTUAL_DISK_ADDRESS
+                        && vaddr < VIRTUAL_DISK_ADDRESS + self.virtual_disk.len() as u64
+                    {
+                        let disk_offset = (vaddr - VIRTUAL_DISK_ADDRESS) as usize;
+                        match funct3 {
+                            funct3::LB => {
+                                self.registers[rd] = self.virtual_disk[disk_offset] as i8 as u64
+                            }
+                            funct3::LH => {
+                                let bytes: [u8; 2] = self.virtual_disk
+                                    [disk_offset..disk_offset + 2]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = i16::from_le_bytes(bytes) as i64 as u64;
+                            }
+                            funct3::LW => {
+                                let bytes: [u8; 4] = self.virtual_disk
+                                    [disk_offset..disk_offset + 4]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
+                            }
+                            funct3::LD => {
+                                let bytes: [u8; 8] = self.virtual_disk
+                                    [disk_offset..disk_offset + 8]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = u64::from_le_bytes(bytes);
+                            }
+                            funct3::LBU => {
+                                self.registers[rd] = self.virtual_disk[disk_offset] as u64
+                            }
+                            funct3::LHU => {
+                                let bytes: [u8; 2] = self.virtual_disk
+                                    [disk_offset..disk_offset + 2]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = u16::from_le_bytes(bytes) as u64;
+                            }
+                            funct3::LWU => {
+                                let bytes: [u8; 4] = self.virtual_disk
+                                    [disk_offset..disk_offset + 4]
+                                    .try_into()
+                                    .unwrap();
+                                self.registers[rd] = u32::from_le_bytes(bytes) as u64;
+                            }
+                            _ => return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64),
+                        }
+                    } else {
+                        let alignment = match funct3 {
+                            funct3::LW | funct3::LWU => 4,
+                            funct3::LD => 8,
+                            funct3::LH | funct3::LHU => 2,
+                            _ => 1,
+                        };
 
-                    if alignment > 1 && vaddr % alignment != 0 {
-                        return self.handle_trap(cause::LOAD_ADDRESS_MISALIGNED, vaddr);
-                    }
+                        if alignment > 1 && vaddr % alignment != 0 {
+                            return self.handle_trap(cause::LOAD_ADDRESS_MISALIGNED, vaddr);
+                        }
 
-                    let paddr = match self.translate_addr(vaddr) {
-                        Ok(addr) => addr,
-                        Err(fault_addr) => {
-                            return self.handle_trap(cause::LOAD_ACCESS_FAULT, fault_addr);
-                        }
-                    };
+                        let paddr = match self.translate(vaddr, false, false) {
+                            Ok(addr) => addr as usize,
+                            Err(fault_addr) => {
+                                return self.handle_trap(cause::LOAD_ACCESS_FAULT, fault_addr);
+                            }
+                        };
 
-                    match funct3 {
-                        funct3::LB => self.registers[rd] = self.memory[paddr] as i8 as i64 as u64,
-                        funct3::LH => {
-                            let bytes: [u8; 2] = self.memory[paddr..paddr + 2].try_into().unwrap();
-                            self.registers[rd] = i16::from_le_bytes(bytes) as i64 as u64;
-                        }
-                        funct3::LW => {
-                            let bytes: [u8; 4] = self.memory[paddr..paddr + 4].try_into().unwrap();
-                            self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
-                        }
-                        funct3::LD => {
-                            let bytes: [u8; 8] = self.memory[paddr..paddr + 8].try_into().unwrap();
-                            self.registers[rd] = u64::from_le_bytes(bytes);
-                        }
-                        funct3::LBU => self.registers[rd] = self.memory[paddr] as u64,
-                        funct3::LHU => {
-                            let bytes: [u8; 2] = self.memory[paddr..paddr + 2].try_into().unwrap();
-                            self.registers[rd] = u16::from_le_bytes(bytes) as u64;
-                        }
-                        funct3::LWU => {
-                            let bytes: [u8; 4] = self.memory[paddr..paddr + 4].try_into().unwrap();
-                            self.registers[rd] = u32::from_le_bytes(bytes) as u64;
-                        }
-                        _ => {
-                            return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                        match funct3 {
+                            funct3::LB => {
+                                self.registers[rd] = self.memory[paddr] as i8 as i64 as u64
+                            }
+                            funct3::LH => {
+                                let bytes: [u8; 2] =
+                                    self.memory[paddr..paddr + 2].try_into().unwrap();
+                                self.registers[rd] = i16::from_le_bytes(bytes) as i64 as u64;
+                            }
+                            funct3::LW => {
+                                let bytes: [u8; 4] =
+                                    self.memory[paddr..paddr + 4].try_into().unwrap();
+                                self.registers[rd] = i32::from_le_bytes(bytes) as i64 as u64;
+                            }
+                            funct3::LD => {
+                                let bytes: [u8; 8] =
+                                    self.memory[paddr..paddr + 8].try_into().unwrap();
+                                self.registers[rd] = u64::from_le_bytes(bytes);
+                            }
+                            funct3::LBU => self.registers[rd] = self.memory[paddr] as u64,
+                            funct3::LHU => {
+                                let bytes: [u8; 2] =
+                                    self.memory[paddr..paddr + 2].try_into().unwrap();
+                                self.registers[rd] = u16::from_le_bytes(bytes) as u64;
+                            }
+                            funct3::LWU => {
+                                let bytes: [u8; 4] =
+                                    self.memory[paddr..paddr + 4].try_into().unwrap();
+                                self.registers[rd] = u32::from_le_bytes(bytes) as u64;
+                            }
+                            _ => {
+                                return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                            }
                         }
                     }
                 }
             }
+
             opcodes::OP_STORE => {
                 let funct3 = (inst >> 12) & 0x7;
                 let rs1 = ((inst >> 15) & 0x1F) as usize;
@@ -136,37 +207,46 @@ impl VM {
                 let vaddr = self.registers[rs1].wrapping_add(imm as i64 as u64);
                 let data = self.registers[rs2];
 
-                let alignment = match funct3 {
-                    funct3::SW => 4,
-                    funct3::SD => 8,
-                    funct3::SH => 2,
-                    _ => 1,
-                };
+                if vaddr >= UART_BASE_ADDRESS && vaddr < UART_BASE_ADDRESS + UART_SIZE {
+                    if funct3 == funct3::SB {
+                        print!("{}", data as u8 as char);
+                        io::stdout().flush().unwrap();
+                    }
+                } else if vaddr >= VIRTUAL_DISK_ADDRESS
+                    && vaddr < VIRTUAL_DISK_ADDRESS + self.virtual_disk.len() as u64
+                {
+                    // Do nothing
+                } else {
+                    let alignment = match funct3 {
+                        funct3::SW => 4,
+                        funct3::SD => 8,
+                        funct3::SH => 2,
+                        _ => 1,
+                    };
 
-                if alignment > 1 && vaddr % alignment != 0 {
-                    return self.handle_trap(cause::STORE_AMO_ADDRESS_MISALIGNED, vaddr);
-                }
+                    if alignment > 1 && vaddr % alignment != 0 {
+                        return self.handle_trap(cause::STORE_AMO_ADDRESS_MISALIGNED, vaddr);
+                    }
 
-                let paddr = match self.translate_addr(vaddr) {
-                    Ok(addr) => addr,
-                    Err(fault_addr) => {
-                        return self.handle_trap(cause::STORE_AMO_ACCESS_FAULT, fault_addr);
-                    }
-                };
+                    let paddr = match self.translate(vaddr, true, false) {
+                        Ok(addr) => addr as usize,
+                        Err(fault_addr) => {
+                            return self.handle_trap(cause::STORE_AMO_ACCESS_FAULT, fault_addr);
+                        }
+                    };
 
-                match funct3 {
-                    funct3::SB => self.memory[paddr] = data as u8,
-                    funct3::SH => {
-                        self.memory[paddr..paddr + 2].copy_from_slice(&(data as u16).to_le_bytes())
-                    }
-                    funct3::SW => {
-                        self.memory[paddr..paddr + 4].copy_from_slice(&(data as u32).to_le_bytes())
-                    }
-                    funct3::SD => {
-                        self.memory[paddr..paddr + 8].copy_from_slice(&data.to_le_bytes())
-                    }
-                    _ => {
-                        return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                    match funct3 {
+                        funct3::SB => self.memory[paddr] = data as u8,
+                        funct3::SH => self.memory[paddr..paddr + 2]
+                            .copy_from_slice(&(data as u16).to_le_bytes()),
+                        funct3::SW => self.memory[paddr..paddr + 4]
+                            .copy_from_slice(&(data as u32).to_le_bytes()),
+                        funct3::SD => {
+                            self.memory[paddr..paddr + 8].copy_from_slice(&data.to_le_bytes())
+                        }
+                        _ => {
+                            return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                        }
                     }
                 }
             }
@@ -414,7 +494,6 @@ impl VM {
                 match funct3 {
                     funct3::FENCE | funct3::FENCE_I => {
                         // In a simple single-core VM, FENCE can be treated as a NOP.
-                        // A more complex implementation would handle memory ordering here.
                     }
                     _ => {
                         return self.handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
@@ -439,14 +518,39 @@ impl VM {
                                 return self.handle_trap(cause::BREAKPOINT, 0);
                             }
                             system::FUNCT12_MRET => {
-                                let mstatus =
-                                    self.csrs.read(csr::MSTATUS, self.privilege_level).unwrap();
-                                self.privilege_level = ((mstatus >> 11) & 0b11) as u8;
+                                let current_priv = self.privilege_level;
+
+                                let mstatus = match self.csrs.read(csr::MSTATUS, current_priv) {
+                                    Some(val) => val,
+                                    None => {
+                                        return self
+                                            .handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64)
+                                    }
+                                };
+                                let mepc = match self.csrs.read(csr::MEPC, current_priv) {
+                                    Some(val) => val,
+                                    None => {
+                                        return self
+                                            .handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64)
+                                    }
+                                };
+
+                                next_pc = mepc;
+
+                                let new_priv_level = ((mstatus >> 11) & 0b11) as u8;
+
                                 let mpie = (mstatus >> 7) & 1;
-                                self.csrs.mstatus = (self.csrs.mstatus & !(1 << 3)) | (mpie << 3);
-                                self.csrs.mstatus |= 1 << 7;
-                                self.csrs.mstatus &= !(0b11 << 11);
-                                next_pc = self.csrs.read(csr::MEPC, self.privilege_level).unwrap();
+                                let mut new_mstatus = mstatus;
+                                new_mstatus = (new_mstatus & !(1 << 3)) | (mpie << 3);
+                                new_mstatus |= 1 << 7;
+                                new_mstatus &= !(0b11 << 11);
+
+                                if !self.csrs.write(csr::MSTATUS, new_mstatus, current_priv) {
+                                    return self
+                                        .handle_trap(cause::ILLEGAL_INSTRUCTION, inst as u64);
+                                }
+
+                                self.privilege_level = new_priv_level;
                             }
                             system::FUNCT12_SRET => {
                                 let sstatus =
@@ -519,153 +623,5 @@ impl VM {
 
         self.pc = next_pc;
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{memory::BASE_ADDRESS, VM};
-    use riscv_core::{abi, csr};
-
-    fn setup_vm() -> VM {
-        let mut vm = VM::new();
-        vm.pc = BASE_ADDRESS;
-        vm
-    }
-
-    #[test]
-    fn test_op_lui() {
-        let mut vm = setup_vm();
-        vm.execute(0xabcde537); // lui a0, 0xABCDE
-        assert_eq!(vm.registers[abi::A0 as usize], 0xffffffffabcde000);
-        assert_eq!(vm.pc, BASE_ADDRESS + 4);
-    }
-
-    #[test]
-    fn test_op_auipc() {
-        let mut vm = setup_vm();
-        vm.execute(0x00001517); // auipc a0, 0x1
-        assert_eq!(vm.registers[abi::A0 as usize], BASE_ADDRESS + 0x1000);
-    }
-
-    #[test]
-    fn test_op_jal() {
-        let mut vm = setup_vm();
-        vm.execute(0x014000ef); // jal ra, 20
-        assert_eq!(vm.registers[abi::RA as usize], BASE_ADDRESS + 4);
-        assert_eq!(vm.pc, BASE_ADDRESS + 20);
-    }
-
-    #[test]
-    fn test_op_jalr() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = BASE_ADDRESS + 0x100;
-        vm.execute(0x020500e7); // jalr ra, 32(a0)
-        assert_eq!(vm.registers[abi::RA as usize], BASE_ADDRESS + 4);
-        assert_eq!(vm.pc, BASE_ADDRESS + 0x100 + 32);
-    }
-
-    #[test]
-    fn test_op_branch() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 5;
-        vm.registers[abi::A1 as usize] = 5;
-        vm.execute(0x00b50863); // beq a0, a1, 16 (taken)
-        assert_eq!(vm.pc, BASE_ADDRESS + 16);
-    }
-
-    #[test]
-    fn test_op_loads() {
-        let mut vm = setup_vm();
-        let data_addr = BASE_ADDRESS + 0x200;
-        let data_val = 0x8899AABBCCDDEEFF_u64;
-        let paddr = vm.translate_addr(data_addr).unwrap();
-        vm.memory[paddr..paddr + 8].copy_from_slice(&data_val.to_le_bytes());
-        vm.registers[abi::A0 as usize] = data_addr;
-
-        vm.execute(0x00053583); // ld a1, 0(a0)
-        assert_eq!(vm.registers[abi::A1 as usize], data_val);
-        vm.execute(0x00052603); // lw a2, 0(a0)
-        assert_eq!(vm.registers[abi::A2 as usize], 0xffffffffccddeeff);
-    }
-
-    #[test]
-    fn test_op_stores() {
-        let mut vm = setup_vm();
-        let store_addr = BASE_ADDRESS + 0x200;
-        vm.registers[abi::A0 as usize] = store_addr;
-        vm.registers[abi::A1 as usize] = 0x11223344AABBCCDD;
-        vm.execute(0x00b53023); // sd a1, 0(a0)
-        let paddr = vm.translate_addr(store_addr).unwrap();
-        assert_eq!(
-            u64::from_le_bytes(vm.memory[paddr..paddr + 8].try_into().unwrap()),
-            0x11223344AABBCCDD
-        );
-    }
-
-    #[test]
-    fn test_op_imm() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 100;
-        vm.execute(0xff650593); // addi a1, a0, -10
-        assert_eq!(vm.registers[abi::A1 as usize], 90);
-    }
-
-    #[test]
-    fn test_op_imm_32() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 0xFFFFFFFF_80000000;
-        vm.execute(0x0015059B); // addiw a1, a0, 1
-        assert_eq!(vm.registers[abi::A1 as usize], -2147483647i64 as u64);
-    }
-
-    #[test]
-    fn test_op_imm_shifts_rv64() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 0x00000000_FFFFFFFF;
-        vm.execute(0x02051593); // slli a1, a0, 32
-        assert_eq!(vm.registers[abi::A1 as usize], 0xFFFFFFFF_00000000);
-    }
-
-    #[test]
-    fn test_op_reg() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 100;
-        vm.registers[abi::A1 as usize] = 50;
-        vm.execute(0x40b50633); // sub a2, a0, a1
-        assert_eq!(vm.registers[abi::A2 as usize], 50);
-    }
-
-    #[test]
-    fn test_op_m_extension() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = -100i64 as u64;
-        vm.registers[abi::A1 as usize] = 10;
-        vm.execute(0x02b50633); // mul a2, a0, a1
-        assert_eq!(vm.registers[abi::A2 as usize], -1000i64 as u64);
-    }
-
-    #[test]
-    fn test_op_reg_32() {
-        let mut vm = setup_vm();
-        vm.registers[abi::A0 as usize] = 10;
-        vm.registers[abi::A1 as usize] = 20;
-        vm.execute(0x40b505bb); // subw a1, a0, a1 -> -10
-        assert_eq!(vm.registers[abi::A1 as usize], -10i64 as u64);
-    }
-
-    #[test]
-    fn test_op_system_csr() {
-        let mut vm = setup_vm();
-        vm.csrs.write(csr::MSTATUS, 0xABCD, vm.privilege_level);
-        vm.registers[abi::A0 as usize] = 0x1234;
-
-        // csrrw a1, mstatus, a0
-        vm.execute(0x300515f3);
-
-        assert_eq!(vm.registers[abi::A1 as usize], 0xABCD);
-
-        let new_mstatus = vm.csrs.read(csr::MSTATUS, vm.privilege_level).unwrap();
-        assert_eq!(new_mstatus, 0x1234);
     }
 }

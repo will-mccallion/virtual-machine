@@ -1,66 +1,48 @@
-use bincode;
-use riscv_core::{Executable, SimpleElfHeader};
 use std::env;
-use std::fs;
-use vm::VM;
+use vm::{VmConfig, VM};
 
-const MAGIC_NUMBER: [u8; 4] = *b"RBF\n";
+const BIOS_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/bios.bin"));
+const KERNEL_BYTES: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kernel.bin"));
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() != 2 {
-        eprintln!("Usage: {} <input.o>", args[0]);
-        return;
-    }
+    let mut trace_enabled = false;
 
-    let file_path = &args[1];
-
-    let file_bytes = match fs::read(file_path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            eprintln!("Error: Failed to read file '{}': {}", file_path, e);
-            return;
-        }
-    };
-
-    let config = bincode::config::standard();
-    let (header, header_len): (SimpleElfHeader, usize) =
-        match bincode::decode_from_slice(&file_bytes, config) {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("Error: Not a valid Rusteze executable file: {}", e);
+    let mut iter = args.iter().skip(1);
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--trace" => trace_enabled = true,
+            _ => {
+                eprintln!("Unknown argument: {}", arg);
+                print_usage(&args[0]);
                 return;
             }
-        };
-
-    if header.magic != MAGIC_NUMBER {
-        eprintln!("Error: Invalid file format. Magic number does not match.");
-        return;
+        }
     }
 
-    let text_start = header_len;
-    let text_end = text_start + header.text_size as usize;
-    let text_section = file_bytes[text_start..text_end].to_vec();
-
-    let data_start = text_end;
-    let data_end = data_start + header.data_size as usize;
-    let data_section = file_bytes[data_start..data_end].to_vec();
-
-    let executable = Executable {
-        text: text_section,
-        data: data_section,
-        bss_size: header.bss_size,
-        entry_point: header.entry_point,
+    println!("VM: Initializing...");
+    let vm_config = VmConfig {
+        trace: trace_enabled,
     };
+    let mut vm = VM::new_config(vm_config);
 
-    let mut vm = VM::new();
+    println!("VM: Loading embedded BIOS...");
+    vm.load_bios(BIOS_BYTES);
 
-    if let Err(e) = vm.load_executable(&executable) {
-        eprintln!("Error: Failed to load executable into VM: {}", e);
-        return;
-    }
+    println!("VM: Loading embedded kernel into virtual disk...");
+    vm.load_virtual_disk(KERNEL_BYTES.to_vec());
 
+    println!("VM: Starting execution at reset vector...");
+    println!("");
     if let Err(e) = vm.run() {
-        eprintln!("VM Runtime Error: {}", e);
+        eprintln!("\n--- VM Runtime Error ---");
+        eprintln!("{}", e);
+        vm.print_state();
+    } else {
+        println!("\n--- VM Halted ---");
     }
+}
+
+fn print_usage(program_name: &str) {
+    eprintln!("Usage: {} [--trace]", program_name);
 }
